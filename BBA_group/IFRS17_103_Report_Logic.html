@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IFRS17 103 报表逻辑说明文档</title>
+    <style>
+        body {
+            font-family: "Microsoft YaHei", Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f7fa;
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+            border-bottom: 2px solid #eef2f7;
+            padding-bottom: 10px;
+        }
+        h1 { text-align: center; margin-bottom: 40px; }
+        .card {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            padding: 25px;
+            margin-bottom: 30px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            font-size: 14px;
+        }
+        th, td {
+            padding: 12px;
+            border: 1px solid #e1e4e8;
+            text-align: left;
+        }
+        th {
+            background-color: #f8f9fa;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+        tr:hover { background-color: #fcfcfc; }
+        .formula {
+            font-family: Consolas, monospace;
+            background-color: #f0f4f8;
+            padding: 2px 6px;
+            border-radius: 4px;
+            color: #0366d6;
+        }
+        .note {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 4px;
+        }
+        .highlight { color: #d63031; font-weight: bold; }
+        
+        /* Diagram Styles */
+        .diagram-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            margin: 40px 0;
+        }
+        .flow-step {
+            background: white;
+            border: 2px solid #3498db;
+            border-radius: 8px;
+            padding: 15px 30px;
+            margin: 10px 0;
+            width: 600px;
+            position: relative;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: transform 0.2s;
+        }
+        .flow-step:hover { transform: translateY(-2px); }
+        .flow-arrow {
+            font-size: 24px;
+            color: #95a5a6;
+            margin: 5px 0;
+        }
+        .step-title { font-weight: bold; color: #2c3e50; display: block; margin-bottom: 5px; }
+        .step-content { font-size: 0.9em; color: #555; }
+        .positive { color: #27ae60; }
+        .negative { color: #c0392b; }
+        
+        .col-lrc-nl { background-color: #e8f4fc; }
+        .col-lrc-lc { background-color: #fce8e8; }
+        .col-lic { background-color: #e8fce8; }
+    </style>
+</head>
+<body>
+
+    <h1>IFRS17 103 报表计算逻辑说明文档</h1>
+
+    <div class="card">
+        <h2>1. 报表列定义与符号规则</h2>
+        <p>本报表用于展示保险合同负债的期初至期末的调节过程（Roll-forward）。</p>
+        <table>
+            <thead>
+                <tr>
+                    <th width="20%">列名</th>
+                    <th width="30%">含义</th>
+                    <th width="50%">符号逻辑 (Display Sign)</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td class="col-lrc-nl"><b>LRC-非亏损部分</b><br>(LRC Non-LC)</td>
+                    <td>未到期责任负债 - 正常盈利部分</td>
+                    <td>
+                        <ul>
+                            <li><b>负债增加</b>：正数 (+)</li>
+                            <li><b>负债减少/收入</b>：负数 (-)</li>
+                            <li><b>计算逻辑</b>：通常通过 <span class="formula">Total - LC</span> 倒挤得出</li>
+                        </ul>
+                    </td>
+                </tr>
+                <tr>
+                    <td class="col-lrc-lc"><b>LRC-亏损部分</b><br>(LRC LC)</td>
+                    <td>未到期责任负债 - 亏损成分 (Loss Component)</td>
+                    <td>
+                        <ul>
+                            <li><b>负债余额</b>：<span class="highlight">正数 (+)</span> (尽管在底层数据中可能存储为负值，但在报表中展示为绝对值)</li>
+                            <li><b>亏损确认(增加LC)</b>：正数 (+)</li>
+                            <li><b>亏损释放(减少LC)</b>：负数 (-)</li>
+                        </ul>
+                    </td>
+                </tr>
+                <tr>
+                    <td class="col-lic"><b>已发生赔款负债</b><br>(LIC)</td>
+                    <td>已发生但未支付的赔款负债</td>
+                    <td>
+                        <ul>
+                            <li><b>负债增加</b>：正数 (+)</li>
+                            <li><b>支付赔款</b>：通常减少负债</li>
+                        </ul>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="card">
+        <h2>2. 各行项目详细计算逻辑</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th width="25%">项目 (Row)</th>
+                    <th width="45%">计算逻辑 / 公式</th>
+                    <th width="30%">备注</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- Row 1 -->
+                <tr>
+                    <td><b>(1) 年初的保险合同负债</b><br>Opening Balance</td>
+                    <td>
+                        <div class="formula">LRC-LC = abs(期初LC余额)</div>
+                        <div class="formula">LRC-Non-LC = 期初总LRC - LRC-LC</div>
+                    </td>
+                    <td>
+                        <div class="note">来源于上一年度期末余额。非亏损部分通过倒挤计算，以确保总额平衡。</div>
+                    </td>
+                </tr>
+                
+                <!-- Row 4 -->
+                <tr>
+                    <td><b>(4) 保险服务收入合计</b><br>Insurance Revenue</td>
+                    <td>
+                        <div class="formula">收入 = CSM摊销 + IACF摊销 + 经验调整 - 预期赔付释放 - RA释放</div>
+                        <br>
+                        <ul>
+                            <li>CSM/IACF摊销：负值 (减少负债)</li>
+                            <li>预期赔付/RA释放：取负号 (减少负债)</li>
+                        </ul>
+                    </td>
+                    <td>
+                        <div class="note">收入主要体现在 <b>LRC-非亏损</b> 列。LRC-亏损列收入为0。</div>
+                    </td>
+                </tr>
+
+                <!-- Row 10 (Expense) -->
+                <tr>
+                    <td><b>(10) 保险服务费用</b><br>Insurance Service Expenses</td>
+                    <td>
+                        <div class="formula">费用 = (6)IACF摊销 + (7)亏损确认及转回 + (8)LIC变动</div>
+                    </td>
+                    <td>
+                        <div class="note">费用增加负债 (正数)。</div>
+                    </td>
+                </tr>
+
+                <!-- Row 6 -->
+                <tr>
+                    <td>&nbsp;&nbsp;↳ <b>(6) IACF摊销</b></td>
+                    <td>
+                        <div class="formula">LRC-Non-LC = 摊销金额</div>
+                    </td>
+                    <td>
+                        <div class="note">增加 LRC-非亏损 部分。</div>
+                    </td>
+                </tr>
+
+                <!-- Row 7 -->
+                <tr>
+                    <td>&nbsp;&nbsp;↳ <b>(7) 亏损部分的确认及转回</b><br>Loss Component Recog.</td>
+                    <td>
+                        <div class="formula">LRC-LC = 初始确认亏损 + 现金流变动 + RA变动 - LC释放</div>
+                        <div class="formula">LRC-Non-LC = 0</div>
+                    </td>
+                    <td>
+                        <div class="note">
+                            <span class="highlight">关键逻辑</span>：
+                            <br>1. 初始确认和不利变动增加 LC (正数)。
+                            <br>2. LC释放 (分摊) 减少 LC (负数)。
+                            <br>3. 净额记入 LRC-亏损 列。
+                        </div>
+                    </td>
+                </tr>
+
+                <!-- Row 11 -->
+                <tr>
+                    <td><b>(11) 保险服务业绩</b><br>Insurance Service Result</td>
+                    <td>
+                        <div class="formula">(11) = (4)收入 + (10)费用</div>
+                    </td>
+                    <td>
+                        <div class="note">反映承保利润。</div>
+                    </td>
+                </tr>
+
+                <!-- Row 12 -->
+                <tr>
+                    <td><b>(12) 保险合同金融变动额</b><br>IFIE (P&L)</td>
+                    <td>
+                        <div class="formula">LRC-LC = abs(IFIE_LC) * (-1 if negative impact)</div>
+                        <div class="formula">LRC-Non-LC = Total_IFIE - LRC-LC</div>
+                    </td>
+                    <td>
+                        <div class="note">包含利息计提。LC列增加负债为正，减少为负。</div>
+                    </td>
+                </tr>
+
+                <!-- Row 14 -->
+                <tr>
+                    <td><b>(14) 其他综合收益其他变动</b><br>OCI</td>
+                    <td>
+                        <div class="formula">LRC-LC = abs(OCI_LC) * (-1 if negative impact)</div>
+                        <div class="formula">LRC-Non-LC = Total_OCI - LRC-LC</div>
+                    </td>
+                    <td>
+                        <div class="note">反映折现率变动影响。</div>
+                    </td>
+                </tr>
+
+                <!-- Row 21 -->
+                <tr>
+                    <td><b>(21) 现金流量合计</b><br>Cash Flows</td>
+                    <td>
+                        <div class="formula">CF = 收到保费(正) + 支付费用(负)</div>
+                    </td>
+                    <td>
+                        <div class="note">主要影响 LRC-非亏损 列。收到保费增加负债，支付费用减少负债。</div>
+                    </td>
+                </tr>
+
+                <!-- Row 23 -->
+                <tr>
+                    <td><b>(23) 年末的保险合同净负债</b><br>Closing Balance</td>
+                    <td>
+                        <div class="formula">期末 = 期初(1) + 业绩(11) + 金融变动(12) + OCI(14) + 现金流(21)</div>
+                    </td>
+                    <td>
+                        <div class="note">严格遵循滚算逻辑。LRC-亏损列显示为绝对值。</div>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="card">
+        <h2>3. 年末 LRC-亏损 (Loss Component) 动态变动示意图</h2>
+        <p>下图展示了 LRC-亏损部分 (Loss Component) 从年初到年末的变动逻辑：</p>
+        
+        <div class="diagram-container">
+            <!-- Opening -->
+            <div class="flow-step col-lrc-lc" style="border-color: #e74c3c;">
+                <span class="step-title">1. 年初余额 (Opening LC)</span>
+                <span class="step-content">
+                    = 上年末余额 (绝对值)<br>
+                    <span class="note">代表期初已确认的亏损责任</span>
+                </span>
+            </div>
+
+            <div class="flow-arrow">↓</div>
+
+            <!-- New Loss -->
+            <div class="flow-step">
+                <span class="step-title">2. 本期新确认亏损 (New Loss Recognized)</span>
+                <span class="step-content">
+                    <span class="positive">+ 初始确认亏损 (Initial Recognition)</span><br>
+                    <span class="note">新签亏损保单带来的亏损</span>
+                </span>
+            </div>
+
+            <div class="flow-arrow">↓</div>
+
+            <!-- Changes -->
+            <div class="flow-step">
+                <span class="step-title">3. 假设/变动调整 (Changes in Estimates)</span>
+                <span class="step-content">
+                    <span class="positive">+ 预期现金流不利变动</span><br>
+                    <span class="positive">+ 非金融风险调整(RA)不利变动</span><br>
+                    <span class="note">未来现金流增加导致亏损增加</span>
+                </span>
+            </div>
+
+            <div class="flow-arrow">↓</div>
+
+            <!-- Release -->
+            <div class="flow-step">
+                <span class="step-title">4. 亏损释放/分摊 (LC Release)</span>
+                <span class="step-content">
+                    <span class="negative">- 预期赔付与费用的亏损分摊</span><br>
+                    <span class="negative">- RA释放的亏损分摊</span><br>
+                    <span class="note">随着服务提供，亏损责任逐渐释放（转回）</span>
+                </span>
+            </div>
+
+            <div class="flow-arrow">↓</div>
+
+            <!-- Finance -->
+            <div class="flow-step">
+                <span class="step-title">5. 金融变动 (IFIE & OCI)</span>
+                <span class="step-content">
+                    <span class="positive">+ 利息计提 (Accretion of Interest)</span><br>
+                    <span class="note">时间价值导致的负债增加</span>
+                </span>
+            </div>
+
+            <div class="flow-arrow">↓</div>
+
+            <!-- Closing -->
+            <div class="flow-step col-lrc-lc" style="border-color: #e74c3c; background-color: #fadbd8;">
+                <span class="step-title">6. 年末余额 (Closing LC)</span>
+                <span class="step-content">
+                    = (1) + (2) + (3) - (4) + (5)<br>
+                    <span class="note">最终的年末亏损成分余额</span>
+                </span>
+            </div>
+
+        </div>
+    </div>
+
+</body>
+</html>

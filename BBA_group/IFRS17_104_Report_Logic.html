@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IFRS17 104 报表逻辑说明文档</title>
+    <style>
+        body {
+            font-family: "Microsoft YaHei", Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f7fa;
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+            border-bottom: 2px solid #eef2f7;
+            padding-bottom: 10px;
+        }
+        h1 { text-align: center; margin-bottom: 40px; }
+        .card {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            padding: 25px;
+            margin-bottom: 30px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            font-size: 14px;
+        }
+        th, td {
+            padding: 12px;
+            border: 1px solid #e1e4e8;
+            text-align: left;
+        }
+        th {
+            background-color: #f8f9fa;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+        tr:hover { background-color: #fcfcfc; }
+        .formula {
+            font-family: Consolas, monospace;
+            background-color: #f0f4f8;
+            padding: 2px 6px;
+            border-radius: 4px;
+            color: #0366d6;
+            font-size: 0.9em;
+        }
+        .note {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 4px;
+        }
+        .highlight { color: #d63031; font-weight: bold; }
+        .tag-pv { background-color: #e3f2fd; color: #1565c0; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; }
+        .tag-ra { background-color: #e8f5e9; color: #2e7d32; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; }
+        .tag-csm { background-color: #fff3e0; color: #ef6c00; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; }
+        
+        /* Diagram Styles */
+        .diagram-container {
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: 20px;
+            margin: 40px 0;
+        }
+        .flow-col {
+            flex: 1;
+            min-width: 250px;
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .flow-col-title {
+            text-align: center;
+            font-weight: bold;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #eee;
+        }
+        .flow-item {
+            background: #f8f9fa;
+            border-left: 4px solid #ccc;
+            padding: 10px;
+            margin-bottom: 10px;
+            font-size: 0.9em;
+        }
+        .flow-arrow { text-align: center; color: #aaa; margin: 5px 0; }
+        .col-pv { border-color: #3498db; }
+        .col-ra { border-color: #2ecc71; }
+        .col-csm { border-color: #e67e22; }
+    </style>
+</head>
+<body>
+
+    <h1>IFRS17 104 报表计算逻辑说明文档</h1>
+
+    <div class="card">
+        <h2>1. 报表概述与列定义</h2>
+        <p>104 报表（未到期责任负债调节表）按计量单元拆分负债构成，展示从期初到期末的变动来源。</p>
+        <table>
+            <thead>
+                <tr>
+                    <th width="20%">列名</th>
+                    <th width="20%">代码字段</th>
+                    <th width="60%">符号逻辑 (Display Sign)</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><b>未来现金流量的现值</b><br>(BEL / PV)</td>
+                    <td><span class="tag-pv">pv</span></td>
+                    <td>
+                        <ul>
+                            <li><b>负债增加</b>：正数 (+)</li>
+                            <li><b>负债减少/释放</b>：负数 (-)</li>
+                            <li>包含盈利合同和亏损合同的预期现金流现值。</li>
+                        </ul>
+                    </td>
+                </tr>
+                <tr>
+                    <td><b>非金融风险调整</b><br>(RA)</td>
+                    <td><span class="tag-ra">ra</span></td>
+                    <td>
+                        <ul>
+                            <li><b>负债增加</b>：正数 (+)</li>
+                            <li><b>负债减少/释放</b>：负数 (-)</li>
+                        </ul>
+                    </td>
+                </tr>
+                <tr>
+                    <td><b>合同服务边际</b><br>(CSM)</td>
+                    <td><span class="tag-csm">csm</span></td>
+                    <td>
+                        <ul>
+                            <li><b>负债增加</b>（未赚利润增加）：正数 (+)</li>
+                            <li><b>负债减少</b>（摊销/转回）：负数 (-)</li>
+                        </ul>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="card">
+        <h2>2. 详细行计算逻辑拆解</h2>
+        <p>以下逻辑基于代码文件 <code>generate_ifrs17_104_report.py</code> 分析得出。</p>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th width="25%">项目 (Row)</th>
+                    <th width="50%">计算公式与代码逻辑</th>
+                    <th width="25%">逻辑说明</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- Row 1 Opening -->
+                <tr>
+                    <td><b>(1) 年初的保险合同负债</b></td>
+                    <td>
+                        <div class="formula">PV = opening_balance['pv']</div>
+                        <div class="formula">RA = opening_balance['ra']</div>
+                        <div class="formula">CSM = opening_balance['csm']</div>
+                    </td>
+                    <td>直接读取上一年度期末余额。</td>
+                </tr>
+
+                <!-- Row 4 CSM Amortization -->
+                <tr>
+                    <td><b>(4) 合同服务边际的摊销</b></td>
+                    <td>
+                        <div class="formula">CSM = get_d('保险合同收入_摊销的CSM')</div>
+                        <span class="note">通常为负数 (减少负债)</span>
+                    </td>
+                    <td>CSM 随服务提供而摊销确认为收入，导致 CSM 余额减少。</td>
+                </tr>
+
+                <!-- Row 5 RA Release -->
+                <tr>
+                    <td><b>(5) 非金融风险调整的变动</b></td>
+                    <td>
+                        <div class="formula">RA = -get_d('保险合同收入_预期释放的非金融风险调整_含亏损')</div>
+                    </td>
+                    <td>
+                        <span class="highlight">取反操作</span>：日志中“释放”通常记录为正值（代表释放量），报表中需显示为负债减少（负数）。
+                        <br>使用含亏损总额，不重复计算亏损分摊。
+                    </td>
+                </tr>
+
+                <!-- Row 6 Experience Adj -->
+                <tr>
+                    <td><b>(6) 当期经验调整</b></td>
+                    <td>
+                        <div class="formula">PV = 0(实际) - 预期赔付(含亏损) + 经验调整(log)</div>
+                    </td>
+                    <td>
+                        反映当期预期现金流的释放（减少负债）以及与实际发生的差异。
+                        <br>注：此处实际赔付设为0，是因为LIC变动在Row 13反映，此处仅关注LRC的释放。
+                    </td>
+                </tr>
+
+                <!-- Row 8 New Business -->
+                <tr>
+                    <td><b>(8) 当期初始确认的保险合同影响</b></td>
+                    <td>
+                        <div class="formula">PV = (新单赔付+费用-保费)_盈利 + (新单赔付+费用-保费)_亏损</div>
+                        <div class="formula">RA = 新单RA_盈利 + 新单RA_亏损</div>
+                        <div class="formula">CSM = 新单CSM_盈利</div>
+                    </td>
+                    <td>
+                        汇总所有新签保单的影响。
+                        <br>盈利合同产生 CSM，亏损合同不产生 CSM (确认为亏损成分)。
+                    </td>
+                </tr>
+
+                <!-- Row 9 CSM Adjustment -->
+                <tr>
+                    <td><b>(9) 调整合同服务边际的估计变更</b></td>
+                    <td>
+                        <div class="formula">PV = -get_d('未到期_调整CSM的预期现金流变动')</div>
+                        <div class="formula">RA = -get_d('未到期_调整CSM的非金融风险调整变动')</div>
+                        <div class="formula">CSM = get_d('未到期_调整CSM的估计变更')</div>
+                    </td>
+                    <td>
+                        <span class="highlight">核心逻辑</span>：
+                        <br>1. 只有浮动收费法(VFA)或一般模型下未来现金流变动才调整 CSM。
+                        <br>2. <b>符号取反</b>：如果预期现金流增加（PV +），则 CSM 应减少以吸收该损失（CSM -）。为保持行内平衡，PV/RA 显示为 CSM 的对冲方向。
+                    </td>
+                </tr>
+
+                <!-- Row 10 Non-CSM Adjustment -->
+                <tr>
+                    <td><b>(10) 不调整合同服务边际的估计变更</b></td>
+                    <td>
+                        <div class="formula">PV = -get_d('亏损合同损益_不调整CSM的预期现金流变动')</div>
+                        <div class="formula">RA = -get_d('亏损合同损益_不调整CSM的非金融风险调整变动')</div>
+                        <div class="formula">CSM = 0</div>
+                    </td>
+                    <td>
+                        当合同为亏损状态（无 CSM 可吸收）时，现金流变动直接计入当期损益。
+                        <br>日志字段为“损益影响”（负数代表亏损/负债增加），报表 PV 列取反后变正数（负债增加）。
+                    </td>
+                </tr>
+
+                <!-- Row 17 IFIE -->
+                <tr>
+                    <td><b>(17) 保险合同金融变动额</b> (IFIE)</td>
+                    <td>
+                        <div class="formula">PV = IFIE_P&L_CF (非亏损+亏损)</div>
+                        <div class="formula">RA = IFIE_P&L_RA (非亏损+亏损)</div>
+                        <div class="formula">CSM = -get_d('IFIE_P&L_未到期_CSM')</div>
+                    </td>
+                    <td>
+                        包含利息计提（Accretion of Interest）。
+                        <br>CSM 利息计提在日志中记为费用（负数），报表中需显示为负债增加（正数），故取反。
+                    </td>
+                </tr>
+
+                <!-- Row 19 OCI -->
+                <tr>
+                    <td><b>(19) 其他综合收益其他变动</b> (OCI)</td>
+                    <td>
+                        <div class="formula">PV/RA = IFIE_OCI (非亏损+亏损)</div>
+                    </td>
+                    <td>
+                        反映折现率变动对负债的影响。
+                    </td>
+                </tr>
+
+                <!-- Row 21-25 Cash Flows -->
+                <tr>
+                    <td><b>(25) 现金流量合计</b></td>
+                    <td>
+                        <div class="formula">PV = 收到保费 + 支付费用</div>
+                    </td>
+                    <td>
+                        收到保费增加 PV 负债（正数）；支付费用减少 PV 负债（负数）。
+                        <br>仅影响 PV 列，不影响 RA 和 CSM。
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="card">
+        <h2>3. 负债构成动态变动示意图</h2>
+        <p>下图展示了三要素 (PV, RA, CSM) 在不同业务环节的变动交互：</p>
+
+        <div class="diagram-container">
+            <!-- PV Column -->
+            <div class="flow-col col-pv">
+                <div class="flow-col-title" style="color: #2980b9;">未来现金流量现值 (PV)</div>
+                
+                <div class="flow-item">
+                    <b>1. 年初余额</b>
+                </div>
+                <div class="flow-arrow">↓</div>
+                
+                <div class="flow-item">
+                    <b>6. 预期释放 (-)</b><br>
+                    <span class="note">随服务提供，未来义务减少</span>
+                </div>
+                <div class="flow-arrow">↓</div>
+
+                <div class="flow-item">
+                    <b>8. 新单确认 (+/-)</b><br>
+                    <span class="note">新增保单的 BEL</span>
+                </div>
+                <div class="flow-arrow">↓</div>
+
+                <div class="flow-item" style="border-left-color: #e67e22;">
+                    <b>9. 估计变更 (被CSM吸收)</b><br>
+                    <span class="note">有利/不利变动，被 CSM 对冲</span>
+                </div>
+                <div class="flow-arrow">↓</div>
+
+                <div class="flow-item" style="border-left-color: #c0392b;">
+                    <b>10. 估计变更 (不调整CSM)</b><br>
+                    <span class="note">亏损合同变动，直接计入 P&L</span>
+                </div>
+                <div class="flow-arrow">↓</div>
+
+                <div class="flow-item">
+                    <b>17. 利息计提 (+)</b><br>
+                    <span class="note">时间价值回转</span>
+                </div>
+                <div class="flow-arrow">↓</div>
+
+                <div class="flow-item">
+                    <b>25. 现金流 (+/-)</b><br>
+                    <span class="note">收保费(+)/付赔款(-)</span>
+                </div>
+            </div>
+
+            <!-- RA Column -->
+            <div class="flow-col col-ra">
+                <div class="flow-col-title" style="color: #27ae60;">非金融风险调整 (RA)</div>
+                
+                <div class="flow-item">
+                    <b>1. 年初余额</b>
+                </div>
+                <div class="flow-arrow">↓</div>
+
+                <div class="flow-item">
+                    <b>5. RA 释放 (-)</b><br>
+                    <span class="note">风险随期间流逝而释放</span>
+                </div>
+                <div class="flow-arrow">↓</div>
+
+                <div class="flow-item">
+                    <b>8. 新单确认 (+)</b><br>
+                    <span class="note">新业务带来的风险溢价</span>
+                </div>
+                <div class="flow-arrow">↓</div>
+
+                <div class="flow-item">
+                    <b>9/10. 估计变更 (+/-)</b><br>
+                    <span class="note">风险假设调整</span>
+                </div>
+                <div class="flow-arrow">↓</div>
+
+                <div class="flow-item">
+                    <b>17. 利息计提 (+)</b><br>
+                    <span class="note">时间价值</span>
+                </div>
+            </div>
+
+            <!-- CSM Column -->
+            <div class="flow-col col-csm">
+                <div class="flow-col-title" style="color: #d35400;">合同服务边际 (CSM)</div>
+                
+                <div class="flow-item">
+                    <b>1. 年初余额</b>
+                </div>
+                <div class="flow-arrow">↓</div>
+
+                <div class="flow-item">
+                    <b>4. CSM 摊销 (-)</b><br>
+                    <span class="note">确认为当期保险收入</span>
+                </div>
+                <div class="flow-arrow">↓</div>
+
+                <div class="flow-item">
+                    <b>8. 新单确认 (+)</b><br>
+                    <span class="note">新业务的未赚利润</span>
+                </div>
+                <div class="flow-arrow">↓</div>
+
+                <div class="flow-item" style="border-left-color: #2980b9;">
+                    <b>9. 吸收 PV/RA 变动 (+/-)</b><br>
+                    <span class="note">抵消 PV/RA 的有利/不利变动</span>
+                </div>
+                <div class="flow-arrow">↓</div>
+
+                <div class="flow-item">
+                    <b>17. 利息计提 (+)</b><br>
+                    <span class="note">锁定利率下的利息增长</span>
+                </div>
+            </div>
+        </div>
+        
+        <p class="note" style="text-align: center;">注：图中 (+) 代表负债增加，(-) 代表负债减少。</p>
+    </div>
+
+</body>
+</html>
