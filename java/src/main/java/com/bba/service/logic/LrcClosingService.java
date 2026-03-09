@@ -29,7 +29,9 @@ public class LrcClosingService {
             logger.logText("⚠️ PV Data not found for " + eopMonthStr + ", attempting fallback...");
              TreeMap<String, PVSourceData> dataMap = new TreeMap<>(context.getPvSourceData().getDataByMonth());
              String fallbackMonth = dataMap.floorKey(eopMonthStr);
-             if (fallbackMonth == null && !dataMap.isEmpty()) fallbackMonth = dataMap.lastKey();
+             if (fallbackMonth == null && !dataMap.isEmpty()) {
+                fallbackMonth = dataMap.lastKey();
+            }
              if (fallbackMonth != null) {
                  pvData = context.getPvSourceData().getData(fallbackMonth);
                  logger.logText("✅ Fallback to PV Data from " + fallbackMonth);

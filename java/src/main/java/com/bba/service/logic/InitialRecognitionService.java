@@ -293,7 +293,9 @@ public class InitialRecognitionService {
             boolean targetIsEmpty = targetCerti == null || targetCerti.trim().isEmpty();
 
             for (SummaryIacfCost c : costs) {
-                if (c == null) continue;
+                if (c == null) {
+                    continue;
+                }
 
                 String dbEndorsement = c.getEndorsementNo();
                 boolean dbIsEmpty = dbEndorsement == null || dbEndorsement.trim().isEmpty();

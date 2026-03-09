@@ -63,7 +63,9 @@ public class GroupLifecycleSimulationService {
 
             // 1. 初始化组数据
             GroupCohortState groupCohortState = initializeGroup(groupId, runDate, valMethod, logger);
-            if (groupCohortState == null) return;
+            if (groupCohortState == null) {
+                return;
+            }
 
             // 2. 初始确认
             runInitialRecognition(groupCohortState, runDate, valMethod, logger);
@@ -479,7 +481,9 @@ public class GroupLifecycleSimulationService {
                 policyContexts.add(context);
             }
 
-            if (policyContexts.isEmpty()) continue;
+            if (policyContexts.isEmpty()){
+                continue;
+            }
 
             // 组级别汇总 & 分配
             logger.logSection("第二部分: 合同组状态判定");
@@ -550,7 +554,9 @@ public class GroupLifecycleSimulationService {
                         .findFirst()
                         .orElse(null);
 
-                if (ps == null) continue;
+                if (ps == null) {
+                    continue;
+                }
 
                 // 设置覆盖单元所需的保单列表 - 按照Python逻辑，应仅包含当前保单以计算单单级别比例
                 // ctx.setPolicies(new ArrayList<>(groupState.getGroupPolicies())); // 原组级别逻辑
@@ -736,9 +742,15 @@ public class GroupLifecycleSimulationService {
             }
 
             // New Business
-            if (ctx.getNbInitialLc() != null) nbInitialLc = nbInitialLc.add(ctx.getNbInitialLc());
-            if (ctx.getNbInitialCsm() != null) nbInitialCsm = nbInitialCsm.add(ctx.getNbInitialCsm());
-            if (ctx.getNbLcIfieTotal() != null) nbLcIfieTotal = nbLcIfieTotal.add(ctx.getNbLcIfieTotal());
+            if (ctx.getNbInitialLc() != null){
+                nbInitialLc = nbInitialLc.add(ctx.getNbInitialLc());
+            }
+            if (ctx.getNbInitialCsm() != null){
+                nbInitialCsm = nbInitialCsm.add(ctx.getNbInitialCsm());
+            }
+            if (ctx.getNbLcIfieTotal() != null){
+                nbLcIfieTotal = nbLcIfieTotal.add(ctx.getNbLcIfieTotal());
+            }
 
             // Retrieve NB flows from PV Data if is new business
             // Use isInitYear as primary check, or check if NB CSM/LC is set
@@ -792,13 +804,21 @@ public class GroupLifecycleSimulationService {
             }
 
             // Revenue
-            if (ctx.getCsmAmortAmount() != null) csmAmort = csmAmort.add(ctx.getCsmAmortAmount());
-            if (ctx.getIacfAmortAmount() != null) iacfAmort = iacfAmort.add(ctx.getIacfAmortAmount());
+            if (ctx.getCsmAmortAmount() != null){
+                csmAmort = csmAmort.add(ctx.getCsmAmortAmount());
+            }
+            if (ctx.getIacfAmortAmount() != null){
+                iacfAmort = iacfAmort.add(ctx.getIacfAmortAmount());
+            }
 
             // Exp Adj
             BigDecimal polExpAdj = BigDecimal.ZERO;
-            if (ctx.getExpAdjPrem() != null) polExpAdj = polExpAdj.add(ctx.getExpAdjPrem());
-            if (ctx.getExpAdjIacf() != null) polExpAdj = polExpAdj.add(ctx.getExpAdjIacf());
+            if (ctx.getExpAdjPrem() != null){
+                polExpAdj = polExpAdj.add(ctx.getExpAdjPrem());
+            }
+            if (ctx.getExpAdjIacf() != null){
+                polExpAdj = polExpAdj.add(ctx.getExpAdjIacf());
+            }
             expAdj = expAdj.add(polExpAdj);
 
             // 累加 CSM 吸收的变动 (Report 104 Row 9)
@@ -827,7 +847,9 @@ public class GroupLifecycleSimulationService {
             BigDecimal netClaims = ctx.getRevenueClaimsExpensesNet() != null ? ctx.getRevenueClaimsExpensesNet() : BigDecimal.ZERO;
             BigDecimal allocClaims = ctx.getRevenueClaimsExpensesLcAlloc() != null ? ctx.getRevenueClaimsExpensesLcAlloc() : BigDecimal.ZERO;
             BigDecimal grossClaims = ctx.getRevenueClaimsExpensesGross();
-            if (grossClaims == null) grossClaims = netClaims.add(allocClaims);
+            if (grossClaims == null){
+                grossClaims = netClaims.add(allocClaims);
+            }
 
             releaseClaimsGross = releaseClaimsGross.add(grossClaims);
             releaseClaimsLcAlloc = releaseClaimsLcAlloc.add(allocClaims);
@@ -836,7 +858,9 @@ public class GroupLifecycleSimulationService {
             BigDecimal netRa = ctx.getRaReleaseNet() != null ? ctx.getRaReleaseNet() : BigDecimal.ZERO;
             BigDecimal allocRa = ctx.getRaReleaseLcAlloc() != null ? ctx.getRaReleaseLcAlloc() : BigDecimal.ZERO;
             BigDecimal grossRa = ctx.getRaReleaseGross();
-            if (grossRa == null) grossRa = netRa.add(allocRa);
+            if (grossRa == null){
+                grossRa = netRa.add(allocRa);
+            }
 
             releaseRaGross = releaseRaGross.add(grossRa);
             releaseRaLcAlloc = releaseRaLcAlloc.add(allocRa);
@@ -875,18 +899,30 @@ public class GroupLifecycleSimulationService {
             // Cash Flows (From PV Data - Actuals? Or Expected?)
             // ReportGenerator uses "现金流_收到的保费". Usually actuals.
             // In Context, we have actualPremium, actualIacfIncurred etc.
-            if (ctx.getActualPremium() != null) cfPrem = cfPrem.add(ctx.getActualPremium());
+            if (ctx.getActualPremium() != null){
+                cfPrem = cfPrem.add(ctx.getActualPremium());
+            }
             if (ctx.getActualIacfIncurred() != null) {
                 cfIacf = cfIacf.add(ctx.getActualIacfIncurred());
                 System.out.println("DEBUG: Aggregating IACF: " + ctx.getActualIacfIncurred() + " Total: " + cfIacf);
             }
 
             // Closing
-            if (ctx.getEndBel() != null) closingBel = closingBel.add(ctx.getEndBel());
-            if (ctx.getEndRa() != null) closingRa = closingRa.add(ctx.getEndRa());
-            if (ctx.getEndCsmFinal() != null) closingCsm = closingCsm.add(ctx.getEndCsmFinal());
-            if (ctx.getEndLcFinal() != null) closingLc = closingLc.add(ctx.getEndLcFinal());
-            if (ctx.getEndLic() != null) closingLic = closingLic.add(ctx.getEndLic());
+            if (ctx.getEndBel() != null){
+                closingBel = closingBel.add(ctx.getEndBel());
+            }
+            if (ctx.getEndRa() != null){
+                closingRa = closingRa.add(ctx.getEndRa());
+            }
+            if (ctx.getEndCsmFinal() != null){
+                closingCsm = closingCsm.add(ctx.getEndCsmFinal());
+            }
+            if (ctx.getEndLcFinal() != null){
+                closingLc = closingLc.add(ctx.getEndLcFinal());
+            }
+            if (ctx.getEndLic() != null){
+                closingLic = closingLic.add(ctx.getEndLic());
+            }
         }
 
         res.put("nb_initial_lc", nbInitialLc);
@@ -1018,8 +1054,12 @@ public class GroupLifecycleSimulationService {
 
                 // 3. Exp Adj
                 BigDecimal exp = BigDecimal.ZERO;
-                if (ctx.getExpAdjPrem() != null) exp = exp.add(ctx.getExpAdjPrem());
-                if (ctx.getExpAdjIacf() != null) exp = exp.add(ctx.getExpAdjIacf());
+                if (ctx.getExpAdjPrem() != null){
+                    exp = exp.add(ctx.getExpAdjPrem());
+                }
+                if (ctx.getExpAdjIacf() != null){
+                    exp = exp.add(ctx.getExpAdjIacf());
+                }
 
                 // 4. Claims Net
                 BigDecimal claimsGross = ctx.getRevenueClaimsExpensesGross();

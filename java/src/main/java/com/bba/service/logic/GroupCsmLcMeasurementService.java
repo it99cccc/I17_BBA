@@ -250,7 +250,9 @@ public class GroupCsmLcMeasurementService {
             if (totalCsmAfterInterest.compareTo(DECIMAL_ZERO) > 0) {
                 for (PolicyContextInput p : policyInputs) {
                     CalculationContext ctx = unitIdToContext.get(p.getUnitId());
-                    if (ctx == null) continue;
+                    if (ctx == null) {
+                        continue;
+                    }
 
                     if (p.getCsmAfterInterest().compareTo(DECIMAL_ZERO) > 0) {
                         BigDecimal csmWeight = p.getCsmAfterInterest().divide(totalCsmAfterInterest, MathContext.DECIMAL128);

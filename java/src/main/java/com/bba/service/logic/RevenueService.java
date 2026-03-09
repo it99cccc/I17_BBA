@@ -137,7 +137,9 @@ public class RevenueService {
         BigDecimal csmAmortRatio;
         if (context.getPolicies() != null && !context.getPolicies().isEmpty()) {
             LocalDate valuationDate = context.getEopDate() != null ? context.getEopDate() : LocalDate.of(context.getYear(), 12, 31);
-            if (valuationDate == null) valuationDate = LocalDate.of(context.getYear(), 12, 31);
+            if (valuationDate == null) {
+                valuationDate = LocalDate.of(context.getYear(), 12, 31);
+            }
             LocalDate startOfYear = LocalDate.of(valuationDate.getYear(), 1, 1);
             
             csmAmortRatio = coverageUnitsService.calculateCoverageUnitsReleased(

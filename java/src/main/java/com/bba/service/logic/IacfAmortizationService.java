@@ -136,7 +136,9 @@ public class IacfAmortizationService {
 
         // 2.2 年初待摊 IACF 余额
         BigDecimal bopIacf = context.getBopIacf() != null ? context.getBopIacf() : BigDecimal.ZERO;
-        if (context.getBopIacf() == null) context.setBopIacf(bopIacf);
+        if (context.getBopIacf() == null) {
+            context.setBopIacf(bopIacf);
+        }
         logger.logItem(
                 "年初待摊IACF余额",
                 "[Step 2.2] 期初尚未摊销的获取费用余额",

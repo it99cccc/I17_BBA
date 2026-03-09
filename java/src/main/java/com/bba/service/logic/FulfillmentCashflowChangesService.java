@@ -205,8 +205,12 @@ public class FulfillmentCashflowChangesService {
         if (context.getPolicies() != null && !context.getPolicies().isEmpty()) {
             warrantyEndDate = context.getPolicies().get(0).getWarrantyEndDate();
         }
-        if (warrantyEndDate == null) warrantyEndDate = context.getWarrantyEndDate();
-        if (warrantyEndDate == null) warrantyEndDate = context.getStartDate();
+        if (warrantyEndDate == null) {
+            warrantyEndDate = context.getWarrantyEndDate();
+        }
+        if (warrantyEndDate == null) {
+            warrantyEndDate = context.getStartDate();
+        }
 
         // Use the valuationDate already defined above
         // LocalDate valuationDate = context.getEopDate();

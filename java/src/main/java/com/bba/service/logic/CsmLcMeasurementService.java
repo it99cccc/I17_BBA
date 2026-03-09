@@ -265,7 +265,9 @@ public class CsmLcMeasurementService {
             BigDecimal nbLcVal = context.getNbInitialLc();
             boolean isReversal = context.isReversalPolicy();
             boolean isNbLc = (!isReversal && nbLcVal.compareTo(BigDecimal.ZERO) < 0) || (isReversal && nbLcVal.compareTo(BigDecimal.ZERO) > 0);
-            if (isNbLc) nbInitialCsmLc = nbLcVal;
+            if (isNbLc) {
+                nbInitialCsmLc = nbLcVal;
+            }
         }
 
         // --- IF（期初有效业务）LC 分摊 ---
