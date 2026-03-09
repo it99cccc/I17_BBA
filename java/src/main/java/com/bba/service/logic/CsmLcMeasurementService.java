@@ -915,14 +915,14 @@ public class CsmLcMeasurementService {
         }
 
         // 计算摊销前 CSM
-        BigDecimal csmBeforeAmortAdjusted;
-        if (context.getAllocatedGroupCsm() != null) {
-            // 如果是组级别分摊的 CSM，该值已经是净额（Net Trial），包含了吸收的影响
-            // 因此不需要再次加上 csmAbsorbedTotal
-            csmBeforeAmortAdjusted = cohortCsm;
-        } else {
-            csmBeforeAmortAdjusted = cohortCsm.add(csmAbsorbedTotal);
-        }
+        // [FIX] 使用 BOP + NB + Interest + Absorbed 的通用公式，避免使用 allocatedGroupCsm (Net Trial) 导致的双重计算或漏算 Delta
+        BigDecimal bopCsmVal = context.getBopCsm() != null ? context.getBopCsm() : BigDecimal.ZERO;
+        BigDecimal nbInitialCsmVal = context.getNbInitialCsm() != null ? context.getNbInitialCsm() : BigDecimal.ZERO;
+        BigDecimal csmInterestVal = (context.getIfInterestCsm() != null ? context.getIfInterestCsm() : BigDecimal.ZERO)
+                .add(context.getNbInterestCsm() != null ? context.getNbInterestCsm() : BigDecimal.ZERO);
+        
+        BigDecimal csmBase = bopCsmVal.add(nbInitialCsmVal).add(csmInterestVal);
+        BigDecimal csmBeforeAmortAdjusted = csmBase.add(csmAbsorbedTotal);
 
         // 计算摊销金额和期末 CSM
         BigDecimal csmAmortAmount;

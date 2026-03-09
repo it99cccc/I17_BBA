@@ -449,7 +449,9 @@ public class GroupCsmLcMeasurementService {
                 // CSM_Start = 50.18.
                 // CSM_Absorbed = Net_Trial - CSM_Start.
                 
-                groupCsmAbsorbedTotal = netTrial.subtract(bopCsmTotal.add(nbInitialCsmTotal).add(csmInterestTotal));
+                // CSM_Absorbed = (Net_Trial + Delta) - (BOP_CSM + NB + Interest)
+                // 确保 CSM 期末余额 = Net Trial + Delta
+                groupCsmAbsorbedTotal = netTrial.add(deltaCsmLcTotal).subtract(bopCsmTotal.add(nbInitialCsmTotal).add(csmInterestTotal));
                 groupLcAbsorbedTotal = deltaCsmLcTotal.subtract(groupCsmAbsorbedTotal);
             } else {
                 // 一直盈利 (没有期初 LC)

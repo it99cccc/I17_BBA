@@ -97,7 +97,7 @@ public class GroupLifecycleSimulationService {
 
         logger.logText("- 找到保单数量: " + policies.size());
         for (PolicyContract p : policies) {
-            logger.logText("  - " + p.getPolicyNo());
+            logger.logText("  - " + p.getPolicyNo()+"-"+p.getCertiNo());
         }
 
         GroupCohortState groupCohortState = new GroupCohortState();
@@ -148,7 +148,7 @@ public class GroupLifecycleSimulationService {
 
         for (GroupPolicyState ps : groupState.getGroupPolicies()) {
             try {
-                logger.logText("### 处理保单: " + ps.getPolicyNo());
+                logger.logText("### 处理保单: " + ps.getPolicyNo()+ps.getCertiNo());
                 log.info("处理保单: {}", ps.getPolicyNo());
 
                 CalculationContext context = new CalculationContext();
@@ -447,6 +447,9 @@ public class GroupLifecycleSimulationService {
                 }
 
                 // --- 核心计算逻辑 ---
+                String pUnitId = (ps.getCertiNo() != null && !ps.getCertiNo().isEmpty()) ? ps.getPolicyNo() + "-" + ps.getCertiNo() : ps.getPolicyNo();
+                context.setUnitId(pUnitId);
+                logger.logText("#### [年度初始计算] 处理保单: " + pUnitId);
 
                 // [修复] 1. 履约现金流变化 (Fulfillment Cashflow Changes) - 对应 Python Part 2 & 4
                 fulfillmentCashflowChangesService.run(
@@ -517,6 +520,7 @@ public class GroupLifecycleSimulationService {
             // [第三部分-步骤1&2] 逐单计算LC分摊比例和分摊的LC
             logger.logText("### [第三部分-步骤1&2] 逐单计算LC分摊比例和分摊的LC");
             for (CalculationContext ctx : policyContexts) {
+                logger.logText("#### [LC分摊计算] 处理保单: " + ctx.getUnitId());
                 // 使用合同组LC作为判断条件
                 csmLcMeasurementService.calculateLcMeasurement(ctx, logger);
             }
@@ -535,6 +539,7 @@ public class GroupLifecycleSimulationService {
             // 3. 逐单计算: CSM 计量 & 最终结账
             logger.logText("### [第三部分-步骤5] 逐单计算CSM计量");
             for (CalculationContext ctx : policyContexts) {
+                logger.logText("#### [CSM计量] 处理保单: " + ctx.getUnitId());
                 // [FIX] 强制同步组级别的状态到 Context，防止 calculateCsmMeasurement 内部判定错误
                 ctx.setProfitable(groupStatus.isProfitable());
 
@@ -560,6 +565,7 @@ public class GroupLifecycleSimulationService {
 
             logger.logText("### [第三部分-步骤6] 逐单计算LC计量的后续部分");
             for (CalculationContext ctx : policyContexts) {
+                logger.logText("#### [LC后续/收入/结账] 处理保单: " + ctx.getUnitId());
                 // [FIX] 再次调用前，确保状态已对齐
                 ctx.setProfitable(groupStatus.isProfitable());
 
@@ -583,17 +589,17 @@ public class GroupLifecycleSimulationService {
                 String targetUnitId = ctx.getUnitId();
                 if (targetUnitId == null) {
                      // 如果 ctx 中没有 unitId（理论上不应该，因为之前已经设置了），尝试构建
-                     targetUnitId = (ctx.getCertiNo() != null && !ctx.getCertiNo().isEmpty()) 
-                                    ? ctx.getPolicyNo() + "-" + ctx.getCertiNo() 
+                     targetUnitId = (ctx.getCertiNo() != null && !ctx.getCertiNo().isEmpty())
+                                    ? ctx.getPolicyNo() + "-" + ctx.getCertiNo()
                                     : ctx.getPolicyNo();
                 }
 
                 String finalTargetUnitId = targetUnitId; // effective final for lambda
-                
+
                 GroupPolicyState ps = groupState.getGroupPolicies().stream()
                         .filter(p -> {
-                            String pUnitId = (p.getCertiNo() != null && !p.getCertiNo().isEmpty()) 
-                                             ? p.getPolicyNo() + "-" + p.getCertiNo() 
+                            String pUnitId = (p.getCertiNo() != null && !p.getCertiNo().isEmpty())
+                                             ? p.getPolicyNo() + "-" + p.getCertiNo()
                                              : p.getPolicyNo();
                             return pUnitId.equals(finalTargetUnitId);
                         })
@@ -601,9 +607,9 @@ public class GroupLifecycleSimulationService {
                         .orElse(null);
 
                 if (ps != null) {
-                    System.out.println("[DEBUG-BBA] 更新年度状态: UnitId=" + finalTargetUnitId + 
-                                       ", Year=" + year + 
-                                       ", EndCsm=" + ctx.getEndCsmFinal() + 
+                    System.out.println("[DEBUG-BBA] 更新年度状态: UnitId=" + finalTargetUnitId +
+                                       ", Year=" + year +
+                                       ", EndCsm=" + ctx.getEndCsmFinal() +
                                        ", EndLc=" + ctx.getEndLcFinal());
                     // 更新 GroupPolicyState 的期末值，供下次迭代使用
                     ps.setBopCsm(ctx.getEndCsmFinal());
