@@ -14,7 +14,9 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.time.Period;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.TemporalAdjusters;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -132,11 +134,6 @@ public class CsmLcMeasurementService {
             throw new IllegalArgumentException("❌ 错误: PV原材料数据不可用！");
         }
 
-        // 确保期末日期已设置
-        if (context.getEopDate() == null) {
-            context.setEopDate(LocalDate.of(context.getYear(), 12, 31));
-        }
-
         // 获取承保日期
         LocalDate uwDate = context.getUnderWriteDate();
         if (uwDate == null) {
@@ -167,12 +164,10 @@ public class CsmLcMeasurementService {
             return;
         }
 
-        // 确定计息截止日期（保单结束日期或计算期末日期）
+        // 确定计息截止日期：保单结束日
         LocalDate stopDate = null;
         if (policyState != null && policyState.getEndDate() != null) {
             stopDate = policyState.getEndDate();
-        } else if (context.getEndDate() != null) {
-            stopDate = context.getEndDate();
         }
 
         // 获取期初 CSM/LC 余额（从上下文或合同组状态）
@@ -922,7 +917,7 @@ public class CsmLcMeasurementService {
         BigDecimal nbInitialCsmVal = context.getNbInitialCsm() != null ? context.getNbInitialCsm() : BigDecimal.ZERO;
         BigDecimal csmInterestVal = (context.getIfInterestCsm() != null ? context.getIfInterestCsm() : BigDecimal.ZERO)
                 .add(context.getNbInterestCsm() != null ? context.getNbInterestCsm() : BigDecimal.ZERO);
-        
+
         BigDecimal csmBase = bopCsmVal.add(nbInitialCsmVal).add(csmInterestVal);
         BigDecimal csmBeforeAmortAdjusted = csmBase.add(csmAbsorbedTotal);
 
@@ -995,10 +990,10 @@ public class CsmLcMeasurementService {
         }
         try {
             LocalDate firstDayOfMonth = LocalDate.parse(targetMonthStr + "01", DateTimeFormatter.ofPattern("yyyyMMdd"));
-            LocalDate targetDate = firstDayOfMonth.with(java.time.temporal.TemporalAdjusters.lastDayOfMonth());
+            LocalDate targetDate = firstDayOfMonth.with(TemporalAdjusters.lastDayOfMonth());
 
-            java.time.Period period = java.time.Period.between(uwDate, targetDate);
-            int months = period.getYears() * 12 + period.getMonths();
+            Period period = Period.between(uwDate, targetDate);
+            int months = period.getYears() * 12 + period.getMonths()+1;
 
             if (targetDate.isAfter(uwDate) && months == 0) {
                 months = 1;
@@ -1030,7 +1025,6 @@ public class CsmLcMeasurementService {
 
         int actualMonthsDiff = monthsDiff;
         if (stopDate != null) {
-            try {
                 LocalDate valDate = LocalDate.parse(valMonthStr + "01", DateTimeFormatter.ofPattern("yyyyMMdd"));
                 if (stopDate.getYear() == valDate.getYear()) {
                     if (stopDate.getMonthValue() < valDate.getMonthValue()) {
@@ -1038,9 +1032,6 @@ public class CsmLcMeasurementService {
                         actualMonthsDiff = monthsFromUwToTarget(uwDate, stopMonthStr);
                     }
                 }
-            } catch (Exception e) {
-                // Ignore
-            }
         }
 
         if (actualMonthsDiff <= 0) {
@@ -1054,7 +1045,7 @@ public class CsmLcMeasurementService {
 
         BigDecimal factor = BigDecimal.ONE;
 
-        // 第1个月：wlk[1] / 2
+        // 第1个月计息半个月
         BigDecimal r1 = ratesMap.getOrDefault(1, BigDecimal.ZERO);
         factor = factor.multiply(BigDecimal.ONE.add(r1.divide(new BigDecimal("2"), 10, RoundingMode.HALF_UP)));
 

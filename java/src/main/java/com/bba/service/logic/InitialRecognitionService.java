@@ -40,10 +40,10 @@ public class InitialRecognitionService {
      *
      * @param context       计算上下文，包含保单数据、PV数据等
      * @param logger        计算日志记录器，用于记录详细计算步骤
-     * @param assumptions   精算假设（此处主要用于日志或潜在计算，当前逻辑主要依赖PV数据）
-     * @param cohortState   合同组状态，用于更新加权锁定利率
+     * @param runDate       运行日期，用于计算初始确认的时间点
      */
-    public void run(CalculationContext context, CalculationLogger logger, Assumptions assumptions, CohortState cohortState) {
+    public void run(CalculationContext context, CalculationLogger logger, String runDate) {
+        int year = Integer.valueOf(runDate.substring(0,4));
         // 记录章节标题：初始确认 - 新业务
         logger.logSection("Part 1: 初始确认 (Initial Recognition) - New Business [Sec 1-3]");
 
@@ -68,19 +68,13 @@ public class InitialRecognitionService {
         if (context.getPolicyData() != null) {
             // 从保单数据中设置实际保费
             context.setActualPremium(context.getPolicyData().getSumPremiumNoTax());
-
             // 设置实际IACF
-            // [Modified] Use actual IACF from database, fallback to assumption only if db lookup fails (which returns 0)
+            //TODO 代替换成实际获取费用表结构
             BigDecimal actualIacf = getActualIacf(context.getPolicyData());
             context.setActualIacfIncurred(actualIacf);
-
             // 记录日志
             logger.logItem("初始确认_实际IACF", "实际发生的获取费用", "From DB: zh.summary_iacf_cost", null, context.getActualIacfIncurred());
         }
-
-        // 使用精算假设
-        // ... (变量用于日志或计算，如果逻辑是动态的，但此处我们读取PV)
-
         // 计算即期利率 (Spot Rate)
         // 这里的Spot Rate通常取自利率曲线的第一个值，用于新单的初始确认折现
         BigDecimal spotRate = ratesManagerService.calculateSpotRate(context.getRatesDf());
@@ -95,7 +89,7 @@ public class InitialRecognitionService {
         );
 
         // 获取保单签单日期的月份字符串 (yyyyMM)
-        String uwMonthStr = context.getUnderWriteDate().withMonth(12).format(DateTimeFormatter.ofPattern("yyyyMM"));
+        String uwMonthStr = context.getUnderWriteDate().getYear() == year ? runDate :context.getUnderWriteDate().withMonth(12).format(DateTimeFormatter.ofPattern("yyyyMM"));
         // 根据签单月获取对应的PV数据
         PVSourceData pvData = context.getPvSourceData().getData(uwMonthStr);
         // 如果找不到对应月份的PV数据
@@ -107,13 +101,13 @@ public class InitialRecognitionService {
         // 检查是否为批减单 (Reversal Policy)
         // 1. 从PV数据的元数据中获取标记
         boolean isReversalPolicy = Boolean.parseBoolean(pvData.getMetadata().getOrDefault("is_reversal_policy", "false").toString());
-        
+
         // 2. 如果实际保费为负数，强制标记为批减单
         if (context.getActualPremium() != null && context.getActualPremium().compareTo(BigDecimal.ZERO) < 0) {
             isReversalPolicy = true;
             logger.logText("⚠️ 检测到实际保费为负值 (" + context.getActualPremium() + ")，强制标记为批减单。");
         }
-        
+
         context.setReversalPolicy(isReversalPolicy);
 
         // 如果是批减单，记录警告日志
@@ -122,7 +116,6 @@ public class InitialRecognitionService {
         }
 
         // 1.1 预期保费现值 (PV Premium)
-        // 对应字段: Pvfl_Nb_Ini_Cfa_Rec_Lkd_Pre_Amt
         String pvFieldPrem = "Pvfl_Nb_Ini_Cfa_Rec_Lkd_Pre_Amt";
         // 从PV数据中获取保费现值，如果为null则设为0
         BigDecimal pvPremium = pvData.getPvNbIniCfaRecLkdPreAmt() != null ? pvData.getPvNbIniCfaRecLkdPreAmt() : BigDecimal.ZERO;
@@ -131,7 +124,6 @@ public class InitialRecognitionService {
                 pvFieldPrem, pvPremium, uwMonthStr);
 
         // 1.2 预期获取费用现值 (PV IACF)
-        // 对应字段: Pvfl_Nb_Ini_Cfa_Rec_Lkd_Acq_Amt
         String pvFieldIacf = "Pvfl_Nb_Ini_Cfa_Rec_Lkd_Acq_Amt";
         // 从PV数据中获取获取费用现值，如果为null则设为0
         BigDecimal valIacf = pvData.getPvNbIniCfaRecLkdAcqAmt() != null ? pvData.getPvNbIniCfaRecLkdAcqAmt() : BigDecimal.ZERO;
@@ -140,7 +132,6 @@ public class InitialRecognitionService {
                 pvFieldIacf, valIacf, uwMonthStr);
 
         // 1.3 预期赔付现值 (PV Claims)
-        // 对应字段: Pvfl_Nb_Ini_Cfa_Rec_Lkd_Cla_Amt
         String pvFieldClaims = "Pvfl_Nb_Ini_Cfa_Rec_Lkd_Cla_Amt";
         // 从PV数据中获取赔付现值，并设置到context中
         context.setInitFutClaim(pvData.getPvNbIniCfaRecLkdClaAmt() != null ? pvData.getPvNbIniCfaRecLkdClaAmt() : BigDecimal.ZERO);
@@ -149,7 +140,6 @@ public class InitialRecognitionService {
                 pvFieldClaims, context.getInitFutClaim(), uwMonthStr);
 
         // 1.4 预期维持费用现值 (PV Maint)
-        // 对应字段: Pvfl_Nb_Ini_Cfa_Rec_Lkd_Mtn_Amt
         String pvFieldMaint = "Pvfl_Nb_Ini_Cfa_Rec_Lkd_Mtn_Amt";
         // 从PV数据中获取维持费用现值，并设置到context中
         context.setInitFutMaint(pvData.getPvNbIniCfaRecLkdMtnAmt() != null ? pvData.getPvNbIniCfaRecLkdMtnAmt() : BigDecimal.ZERO);
@@ -158,7 +148,6 @@ public class InitialRecognitionService {
                 pvFieldMaint, context.getInitFutMaint(), uwMonthStr);
 
         // 1.5 非金融风险调整 (RA)
-        // 对应字段: Pvfl_Nb_Ini_Cfa_Rec_Lkd_Rad_Amt
         String pvFieldRa = "Pvfl_Nb_Ini_Cfa_Rec_Lkd_Rad_Amt";
         // 从PV数据中获取RA现值，并设置到context中
         context.setInitRa(pvData.getPvNbIniCfaRecLkdRadAmt() != null ? pvData.getPvNbIniCfaRecLkdRadAmt() : BigDecimal.ZERO);
@@ -234,15 +223,15 @@ public class InitialRecognitionService {
 
         // 更新加权锁定利率 (Weighted Locked Rate)
         // 仅当 cohortState 不为空时执行（即有合同组上下文）
-        if (cohortState != null) {
-            // 调用利率管理服务更新加权锁定利率
-            ratesManagerService.updateWeightedLockedRate(
-                cohortState,
-                spotRate,
-                context.getActualPremium(),
-                logger
-            );
-        }
+//        if (cohortState != null) {
+//            // 调用利率管理服务更新加权锁定利率
+//            ratesManagerService.updateWeightedLockedRate(
+//                cohortState,
+//                spotRate,
+//                context.getActualPremium(),
+//                logger
+//            );
+//        }
     }
 
     /**

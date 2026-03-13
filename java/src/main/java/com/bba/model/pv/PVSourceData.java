@@ -23,8 +23,8 @@ import java.util.Map;
  */
 @Data
 public class PVSourceData {
-    @JSONField(name = "policy_no")
-    private String policyNo; // 保单号
+    @JSONField(name = "unit_id")
+    private String unitId; // 保单号
 
     @JSONField(name = "valuation_month")
     private String valuationMonth; // 评估月份 (YYYYMM)

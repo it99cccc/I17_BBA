@@ -94,8 +94,10 @@ public class FulfillmentCashflowChangesService {
         boolean isInitialYear = isNewBusiness;
         context.setInitialYear(isInitialYear);
 
-        // 步骤 1: 计算经验调整 (Experience Adjustment)
-        calculateExperienceAdjustment(context, logger, assumptions, isNewBusiness);
+        // 步骤 1: 计算经验调整 (Experience Adjustment),保费和获取费用使用实际数，不需要考虑假设变更
+//        calculateExperienceAdjustment(context, logger, assumptions, isNewBusiness);
+        context.setPremVar(BigDecimal.ZERO);
+        context.setIacfVar(BigDecimal.ZERO);
 
         // 步骤 2: 计算被 CSM/LC 吸收的变化 (CSM/LC Absorption)
         calculateCsmLcAbsorption(context, logger, cohortState, policies);
@@ -476,88 +478,29 @@ public class FulfillmentCashflowChangesService {
         boolean isNewBusiness = context.isNewBusiness();
 
         // Sec 5.2 保费现金流变化 (Delta Prem)
-        BigDecimal effFEndPrem = getPvAmount(pvData.getPvIfEopCfaRepWlkPreAmt());
-        BigDecimal effFBegPrem = getPvAmount(pvData.getPvIfBopCfaRepWlkPreAmt());
-        BigDecimal effCYearPrem = getPvAmount(pvData.getPvIfBopCcaRepWlkPreAmt());
-
-        BigDecimal newFEndPrem = BigDecimal.ZERO;
-        BigDecimal newFInitPrem = BigDecimal.ZERO;
-        BigDecimal newCInitPrem = BigDecimal.ZERO;
-
-        if (isNewBusiness) {
-            newFEndPrem = getPvAmount(pvData.getPvNbEopCfaRepWlkPreAmt());
-            newFInitPrem = getPvAmount(pvData.getPvNbIniCfaRepWlkPreAmt());
-            newCInitPrem = getPvAmount(pvData.getPvNbIniCcaRepWlkPreAmt());
-        }
-
-        // 计算保费变化量
-        // 公式：(EffEnd + NBEnd) - (EffBeg + NBInit) + (EffActual + NBActual) - (EffExpCurrent + NBExpCurrent) - AdjPrem
-        BigDecimal effActualPrem = context.getActualPremiumEff() != null ? context.getActualPremiumEff() : BigDecimal.ZERO;
-        BigDecimal nbActualPrem = context.getActualPremiumNb() != null ? context.getActualPremiumNb() : BigDecimal.ZERO;
-
-        BigDecimal effExpCurrentPrem = effCYearPrem;
-        BigDecimal nbExpCurrentPrem = newCInitPrem;
-
-        BigDecimal adjPrem = context.getAdjPrem() != null ? context.getAdjPrem() : BigDecimal.ZERO;
-
-        BigDecimal deltaPrem = effFEndPrem.add(newFEndPrem)
-                .subtract(effFBegPrem.add(newFInitPrem))
-                .add(effActualPrem.add(nbActualPrem))
-                .subtract(effExpCurrentPrem.add(nbExpCurrentPrem))
-                .subtract(adjPrem);
+        BigDecimal deltaPrem = BigDecimal.ZERO;
 
         context.setDeltaPrem(deltaPrem);
 
         logger.logItem("保费现金流变化", "[Sec 5.2] 保费现金流变化（统一Wlk公式）",
-                "Δ_Prem = (End - Init) + Actual - Expected_Current - Adj", null, deltaPrem, "修正公式对齐Python");
+                "Δ_Prem = (End - Init) + Actual - Expected_Current - Adj", null, deltaPrem, "默认保费现金流没有变化");
 
         // Sec 5.3 IACF 变化 (Delta IACF)
-        BigDecimal effFEndIacf = getPvAmount(pvData.getPvIfEopCfaRepWlkAcqAmt());
-        BigDecimal effFBegIacf = getPvAmount(pvData.getPvIfBopCfaRepWlkAcqAmt());
-        BigDecimal effCYearIacf = getPvAmount(pvData.getPvIfBopCcaRepWlkAcqAmt());
-
-        BigDecimal newFEndIacf = BigDecimal.ZERO;
-        BigDecimal newFInitIacf = BigDecimal.ZERO;
-        BigDecimal newCInitIacf = BigDecimal.ZERO;
-
-        if (isNewBusiness) {
-            newFEndIacf = getPvAmount(pvData.getPvNbEopCfaRepWlkAcqAmt());
-            newFInitIacf = getPvAmount(pvData.getPvNbIniCfaRepWlkAcqAmt());
-            newCInitIacf = getPvAmount(pvData.getPvNbIniCcaRepWlkAcqAmt());
-        }
-
-        // 计算 IACF 变化量
-        // 公式：(EffEnd + NBEnd) - (EffBeg + NBInit) + (EffActual + NBActual) - (EffExpCurrent + NBExpCurrent) - AdjIacf
-        BigDecimal effActualIacf = context.getActualIacfEff() != null ? context.getActualIacfEff() : BigDecimal.ZERO;
-        BigDecimal nbActualIacf = context.getActualIacfNb() != null ? context.getActualIacfNb() : BigDecimal.ZERO;
-
-        BigDecimal effExpCurrentIacf = effCYearIacf;
-        BigDecimal nbExpCurrentIacf = newCInitIacf;
-
-        BigDecimal adjIacf = context.getAdjIacf() != null ? context.getAdjIacf() : BigDecimal.ZERO;
-
-        BigDecimal deltaIacf = effFEndIacf.add(newFEndIacf)
-                .subtract(effFBegIacf.add(newFInitIacf))
-                .add(effActualIacf.add(nbActualIacf))
-                .subtract(effExpCurrentIacf.add(nbExpCurrentIacf))
-                .subtract(adjIacf);
+        BigDecimal deltaIacf = BigDecimal.ZERO;
 
         context.setDeltaIacf(deltaIacf);
-        logger.logItem("IACF变化", "[Sec 5.3] IACF变化（统一Wlk公式）", "Δ_IACF = (End - Init) + Actual - Expected_Current - Adj", null, deltaIacf, "修正公式对齐Python");
+        logger.logItem("IACF变化", "[Sec 5.3] IACF变化（统一Wlk公式）", "Δ_IACF = (End - Init) + Actual - Expected_Current - Adj", null, deltaIacf, "默认获取费用没有变化");
 
         // Sec 5.4 赔付变化 (Delta Claims)
         BigDecimal effFEndClaim = getPvAmount(pvData.getPvIfEopCfaRepWlkClaAmt());
         BigDecimal effFBegClaim = getPvAmount(pvData.getPvIfBopCfaRepWlkClaAmt());
-        // BigDecimal effCYearClaim = getPvAmount(pvData.getPvIfBopCcaRepWlkClaAmt()); // Not used in user formula
 
         BigDecimal newFEndClaim = BigDecimal.ZERO;
         BigDecimal newFInitClaim = BigDecimal.ZERO;
-        // BigDecimal newCInitClaim = BigDecimal.ZERO; // Not used in user formula
 
         if (isNewBusiness) {
             newFEndClaim = getPvAmount(pvData.getPvNbEopCfaRepWlkClaAmt());
             newFInitClaim = getPvAmount(pvData.getPvNbIniCfaRepWlkClaAmt());
-            // newCInitClaim = getPvAmount(pvData.getPvNbIniCcaRepWlkClaAmt());
         }
 
         // Debug Logs
@@ -578,16 +521,13 @@ public class FulfillmentCashflowChangesService {
         // Sec 5.5 维持费用变化 (Delta Maint)
         BigDecimal effFEndMaint = getPvAmount(pvData.getPvIfEopCfaRepWlkMtnAmt());
         BigDecimal effFBegMaint = getPvAmount(pvData.getPvIfBopCfaRepWlkMtnAmt());
-        // BigDecimal effCYearMaint = getPvAmount(pvData.getPvIfBopCcaRepWlkMtnAmt()); // Not used
 
         BigDecimal newFEndMaint = BigDecimal.ZERO;
         BigDecimal newFInitMaint = BigDecimal.ZERO;
-        // BigDecimal newCInitMaint = BigDecimal.ZERO; // Not used
 
         if (isNewBusiness) {
             newFEndMaint = getPvAmount(pvData.getPvNbEopCfaRepWlkMtnAmt());
             newFInitMaint = getPvAmount(pvData.getPvNbIniCfaRepWlkMtnAmt());
-            // newCInitMaint = getPvAmount(pvData.getPvNbIniCcaRepWlkMtnAmt());
         }
 
         // Debug Logs
@@ -609,18 +549,12 @@ public class FulfillmentCashflowChangesService {
         // 合计 = 保费变化 - IACF变化 - 赔付变化 - 维费变化
         BigDecimal deltaCfTotal = deltaPrem.subtract(deltaIacf).subtract(deltaClaims).subtract(deltaMaint);
 
-        // 修正: 剔除 IFIE PV Interest (Time Value of Money) - NO, Python uses raw Delta CF Total
-        // BigDecimal ifieCf = context.getIfiePvCfTotal() != null ? context.getIfiePvCfTotal() : BigDecimal.ZERO;
-
-        // [User Request] Match Python logic: Do NOT force to 0. Use calculated value.
-        // Python: delta_cf_total = delta_prem - delta_iacf - delta_claims - delta_maint
         BigDecimal deltaCfTotalAdjusted = deltaCfTotal;
 
         context.setDeltaCfTotal(deltaCfTotalAdjusted);
 
         Map<String, Object> deltaCfMeta = new HashMap<>();
         deltaCfMeta.put("Raw Delta CF", deltaCfTotal);
-        // deltaCfMeta.put("IFIE PV CF (Interest)", ifieCf);
 
         logger.logItem("预期现金流变化合计", "[Sec 5.6] 预期现金流变化合计",
                 "Δ_CF_Total = Δ_Prem - Δ_IACF - Δ_Claims - Δ_Maint",
@@ -639,9 +573,6 @@ public class FulfillmentCashflowChangesService {
         }
 
         BigDecimal deltaRa = effFEndRa.add(newFEndRa).subtract(effFBegRa.add(newFInitRa));
-
-        // 修正: 剔除 IFIE PV RA Interest - NO, Match Python
-        // BigDecimal ifieRa = context.getIfiePvRaTotal() != null ? context.getIfiePvRaTotal() : BigDecimal.ZERO;
 
         BigDecimal deltaRaAdjusted = deltaRa;
 

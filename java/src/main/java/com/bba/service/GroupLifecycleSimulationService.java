@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import com.bba.util.ReportGenerator;
 import java.nio.file.Files;
@@ -67,7 +68,7 @@ public class GroupLifecycleSimulationService {
                 return;
             }
 
-            // 2. 初始确认
+            // 2. 初始确认（计算PV现值）
             runInitialRecognition(groupCohortState, runDate, valMethod, logger);
 
             // 3. 仿真循环
@@ -109,6 +110,7 @@ public class GroupLifecycleSimulationService {
             GroupPolicyState ps = new GroupPolicyState();
             ps.setPolicyNo(p.getPolicyNo());
             ps.setCertiNo(p.getCertiNo());
+            ps.setUnitId(p.getPolicyNo()+p.getCertiNo());
             ps.setStartDate(p.getStartDate());
             ps.setEndDate(p.getEndDate());
             ps.setWarrantyEndDate(p.getWarrantyEndDate() != null ? p.getWarrantyEndDate() : p.getStartDate());
@@ -159,36 +161,34 @@ public class GroupLifecycleSimulationService {
                 context.setUnderWriteDate(ps.getValuationDate());
                 context.setStartDate(ps.getStartDate());
                 context.setEndDate(ps.getEndDate());
+                //保修责任止期
                 context.setWarrantyEndDate(ps.getWarrantyEndDate());
                 context.setYear(ps.getValuationDate().getYear());
+                //签单日期
                 context.setValMonthStr(ps.getValuationDate().format(YYYYMM));
 
                 // 设置实际签单保费，用于加权锁定利率更新
-                // 防止 RatesManagerService 中因保费为 null 导致的 NPE
                 context.setActualPremium(ps.getWrittenPremium() != null ? ps.getWrittenPremium() : BigDecimal.ZERO);
 
                 // 加载 PV 数据
                 PVSourceDataCollection pvData = pvSourceLoaderService.generatePvSourceData(ps.getPolicyNo(),ps.getCertiNo(), runDate);
                 context.setPvSourceData(pvData);
 
-                // 加载利率曲线
+                // 加载签单时点利率曲线
                 List<RateCurve> rates = ratesManagerService.getRates(context.getValMonthStr());
                 context.setRatesDf(rates);
                 context.setRatesDfLocked(rates); // 初始确认时锁定
 
-                // 获取精算假设
+                // 获取签单时点精算假设
                 Assumptions assumptions = dataLoaderService.getAssumptions(ps.getClassCode(), context.getValMonthStr(), valMethod);
-                // dataLoaderService 如果找不到数据会抛出异常，因此此处无需判空或默认值
                 context.setAssumptions(assumptions);
 
-                initialRecognitionService.run(context, logger, assumptions, groupState); // 传入 groupState 作为 CohortState
-
+                //计算保单初始CSM/LC
+                initialRecognitionService.run(context, logger, runDate);
                 ps.setInitialCsm(context.getNbInitialCsm());
                 ps.setInitialLc(context.getNbInitialLc());
                 ps.setReversalPolicy(context.isReversalPolicy());
 
-                // 如果有拆分数据则存储 (InitialRecognitionService 通常计算总额，拆分可能需要推导)
-                // 假设 context 中已有这些数据
                 if (context.getNbInitialLcCf() != null) {
                     ps.setInitialLcCf(context.getNbInitialLcCf());
                     ps.setInitialLcRa(context.getNbInitialLcRa());
@@ -205,7 +205,6 @@ public class GroupLifecycleSimulationService {
             } catch (Throwable e) {
                 logger.logText("❌ 处理保单 " + ps.getPolicyNo() + " 时发生错误: " + e.getMessage());
                 log.error("处理保单 {} 时发生错误", ps.getPolicyNo(), e);
-                // 根据要求重新抛出异常以停止执行
                 throw new RuntimeException("处理保单 " + ps.getPolicyNo() + " 时发生严重错误", e);
             }
         }
@@ -215,19 +214,6 @@ public class GroupLifecycleSimulationService {
 
         logger.logText("组初始 CSM: " + groupInitialCsm);
         logger.logText("组初始 LC: " + groupInitialLc);
-
-        logger.logSection("Part 1.5: 构建组级利率曲线");
-        logger.logText("### 组级Wlk利率曲线构建完成");
-        logger.logText("**定义**: 基于组内各保单初始确认CSM的加权锁定利率曲线");
-        logger.logText("**公式**: `第1期 = 最早初始确认月份的加权利率；第k期对应自然月=最早月份向后第k-1个月；每期利率 = 所有已存在保单在该月对应offset期的利率，按初始确认CSM加权平均`");
-
-        String baseMonth = groupState.getGroupPolicies().isEmpty() ? "N/A" : groupState.getGroupPolicies().get(0).getValuationDate().format(YYYYMM);
-        logger.logText(String.format("**数值**: 基准月份（第1期） = %s, 期数总数 = 749, 参与保单数量 = %d, 累计CSM权重 = %,.2f",
-                baseMonth,
-                groupState.getGroupPolicies().size(),
-                groupInitialCsm));
-        logger.logText("**结果**: `0.00`");
-        logger.logText("*说明*: 已将组级Wlk曲线写入 GroupCohortState.group_rate_curve（期数 -> 月化远期利率）");
     }
 
     /**
@@ -240,42 +226,42 @@ public class GroupLifecycleSimulationService {
      * @param logger     日志记录器
      */
     private void simulateLifecycle(GroupCohortState groupState, String runDate, String valMethod, CalculationLogger logger) {
-        logger.logSection("开始组维度生命周期仿真"); // Match Python log
+        logger.logSection("开始组维度生命周期仿真");
 
         int runYear = Integer.parseInt(runDate.substring(0, 4));
+        //取最小的签单日期作为起始年度
         int startYear = groupState.getGroupPolicies().stream()
                 .map(p -> p.getValuationDate().getYear())
                 .min(Integer::compareTo)
                 .orElse(runYear);
 
-        int maxYear = BbaConstants.MAX_SIMULATION_YEAR;
         int endYear = groupState.getGroupPolicies().stream()
                 .map(p -> p.getEndDate().getYear())
                 .max(Integer::compareTo)
                 .orElse(runYear);
 
-        if (endYear > maxYear) {
-            logger.logText("⚠️ **警告**: 保单终止日期最晚为 " + endYear + "年，但数据库仅配置到 " + maxYear + "年");
-            logger.logText("   将仅计算到 " + maxYear + "年底");
-            endYear = maxYear;
+        if (endYear > runYear) {
+            logger.logText("⚠️ **警告**: 保单终止日期最晚为 " + endYear + "年，但数据库仅配置到 " + runYear + "年");
+            logger.logText("   将仅计算到 " + runYear + "年底");
+            endYear = runYear;
         }
 
         logger.logText("- **起始年度**: " + startYear);
         logger.logText("- **终止年度**: " + endYear);
 
-        // 1.5 构建组级别锁定利率曲线 (Weighted Locked Rate Curve)
-         // 只有 BBA 方法需要构建组级锁定利率曲线
-         // if ("BBA".equalsIgnoreCase(valMethod)) {
-         //     buildGroupLevelRateCurve(groupState, logger);
-         // }
-
          // 2. 逐年仿真
         List<Map<String, Object>> groupYearlyResults = new ArrayList<>();
 
         for (int year = startYear; year <= endYear; year++) {
-            boolean isInitialYear = (year == startYear);
             String valMonthStr = year + "12";
             LocalDate currentValDate = LocalDate.of(year, 12, 31);
+            boolean isInitialYear = (year == startYear);
+            //如果评估期只有一年，或者是最后一年，评估期取运行日期
+            if((year == startYear && year == endYear) || year == endYear){
+                valMonthStr = runDate;
+                currentValDate = YearMonth.parse(runDate, DateTimeFormatter.ofPattern("yyyyMM")).atEndOfMonth();
+
+            }
 
             logger.logSection("Year " + year + " 年度计量");
             logger.logText("### [Step 1] 确定评估时点");
@@ -287,10 +273,6 @@ public class GroupLifecycleSimulationService {
 
             List<RateCurve> ratesDfCurrent = ratesManagerService.getRates(valMonthStr);
             logger.logText("✅ 成功获取 " + valMonthStr + " 利率曲线 (" + ratesDfCurrent.size() + " 条记录)");
-
-            // 组级CSM期初与新增（组口径）
-            BigDecimal nbCsmGroup = BigDecimal.ZERO;
-            BigDecimal nbLcGroup = BigDecimal.ZERO;
 
             if (isInitialYear) {
                 groupState.setBopCsm(DECIMAL_ZERO);
@@ -308,20 +290,6 @@ public class GroupLifecycleSimulationService {
                 groupState.setBopLc(bopLcGroup);
             }
 
-            // [修复] 计算当年 NB (用于日志和检查)
-            for (GroupPolicyState ps : groupState.getGroupPolicies()) {
-                if (ps.getValuationDate().getYear() == year) {
-                    nbCsmGroup = nbCsmGroup.add(ps.getInitialCsm() != null ? ps.getInitialCsm() : BigDecimal.ZERO);
-                    nbLcGroup = nbLcGroup.add(ps.getInitialLc() != null ? ps.getInitialLc() : BigDecimal.ZERO);
-                }
-            }
-
-            logger.logText("### 组级CSM期初与新增（组口径）");
-            logger.logText(String.format("- IF_年初CSM余额（组级）: %,.2f", groupState.getBopCsm()));
-            logger.logText(String.format("- 当年新增合同CSM（组级）: %,.2f", nbCsmGroup));
-            logger.logText(String.format("- IF_年初LC（组级）: %,.2f", groupState.getBopLc()));
-            logger.logText(String.format("- 当年新增合同LC（组级）: %,.2f", nbLcGroup));
-
             logger.logText("### [Step 3] 逐单计算明细");
 
             List<CalculationContext> policyContexts = new ArrayList<>();
@@ -329,16 +297,15 @@ public class GroupLifecycleSimulationService {
             for (GroupPolicyState ps : groupState.getGroupPolicies()) {
                 logger.logText("DEBUG: Loop Year=" + year + ", Policy=" + ps.getPolicyNo() + ", StartDate=" + ps.getStartDate() + ", ValDate=" + ps.getValuationDate());
                 // [修复] 使用 StartDate 和 ValuationDate 的较小值来判断是否开始处理
-            // 只要当前年份达到了 ValuationDate 或 WarrantyEndDate 其中之一，就开始处理（例如处理初始费用）
-            int policyStartYear =  ps.getValuationDate().getYear();
-            if (year < policyStartYear) {
-                 logger.logText("DEBUG: Skipping policy " + ps.getPolicyNo() + " because Year " + year + " < PolicyStartYear " + policyStartYear + " (Min of WarrantyEnd/Val)");
-                 continue;
-            }
+                 // 只要当前年份达到了 ValuationDate 或 WarrantyEndDate 其中之一，就开始处理（例如处理初始费用）
+                //TODO 待审查
+                int policyStartYear =  ps.getValuationDate().getYear();
+                if (year < policyStartYear) {
+                     logger.logText("DEBUG: Skipping policy " + ps.getPolicyNo() + " because Year " + year + " < PolicyStartYear " + policyStartYear + " (Min of WarrantyEnd/Val)");
+                     continue;
+                }
 
-                // 格式化显示名称
-                String policyDisplay = ps.getPolicyNo() + (ps.getCertiNo() != null && !ps.getCertiNo().isEmpty() ? " (批单: " + ps.getCertiNo() + ")" : "");
-                logger.logText("#### 处理保单: " + policyDisplay);
+                logger.logText("#### 处理保单: " + ps.getPolicyNo()+ps.getCertiNo());
 
                 CalculationContext context = new CalculationContext();
                 context.setPolicyNo(ps.getPolicyNo());
@@ -364,14 +331,14 @@ public class GroupLifecycleSimulationService {
                 context.setBopIacf(ps.getBopIacf() != null ? ps.getBopIacf() : BigDecimal.ZERO);
 
                 // 加载该评估日期的 PV 数据
+                //TODO 重复调用，需要优化
                 PVSourceDataCollection pvDataCollection = pvSourceLoaderService.generatePvSourceData(ps.getPolicyNo(), ps.getCertiNo(), runDate);
                 context.setPvSourceData(pvDataCollection);
 
                 // 获取当期 PV 数据
                 PVSourceData pvData = pvDataCollection.getData(valMonthStr);
 
-                // 判断是否为新业务年度
-                // [Modified] Use policyStartYear (min of WarrantyEndDate and ValuationDate) as the effective new business year
+                // 判断是否为新业务年度:签单年是否等于当前评估年
                 boolean isNewBusiness = (policyStartYear == year);
                 logger.logText("DEBUG: Policy=" + ps.getPolicyNo() + ", ValDate=" + ps.getValuationDate() + ", Year=" + year + ", isNB=" + isNewBusiness);
                 context.setNewBusiness(isNewBusiness);
@@ -389,8 +356,7 @@ public class GroupLifecycleSimulationService {
                         context.setInitFutMaint(pvData.getPvNbIniCfaRecLkdMtnAmt() != null ? pvData.getPvNbIniCfaRecLkdMtnAmt() : BigDecimal.ZERO);
                         context.setInitRa(pvData.getPvNbIniCfaRecLkdRadAmt() != null ? pvData.getPvNbIniCfaRecLkdRadAmt() : BigDecimal.ZERO);
                     } else {
-                        // 如果 PV 数据缺失，设为 0 避免 NPE，但在实际业务中这可能是不正确的
-                        log.error("评估月份:{},读取的PV数据为空",valMonthStr);
+                        throw new IllegalArgumentException("评估月份:" + valMonthStr + ",读取的PV数据为空");
                     }
                 } else {
                     context.setNbInitialCsm(DECIMAL_ZERO);
@@ -404,7 +370,7 @@ public class GroupLifecycleSimulationService {
                     context.setInitRa(BigDecimal.ZERO);
                 }
 
-                // 加载精算假设
+                // 加载评估时点精算假设
                 Assumptions assumptions = dataLoaderService.getAssumptions(ps.getClassCode(), valMonthStr, valMethod);
                 context.setAssumptions(assumptions);
 
@@ -415,9 +381,6 @@ public class GroupLifecycleSimulationService {
                 String uwMonthStr = ps.getUwMonthStr();
                 List<RateCurve> lockedRates = ratesManagerService.getRates(uwMonthStr);
                 context.setRatesDfLocked(lockedRates);
-
-                // [修复] 设置保单列表供 CoverageUnitsService 使用 - 按照Python逻辑，应仅包含当前保单以计算单单级别比例
-                // context.setPolicies(new ArrayList<>(groupState.getGroupPolicies())); // 原组级别逻辑
                 context.setPolicies(Collections.singletonList(ps));
 
                 // 设置实际现金流 (Cash Flows)
@@ -429,7 +392,6 @@ public class GroupLifecycleSimulationService {
                     if (pvIacf != null) {
                         context.setInitPvIacf(pvIacf);
                     }
-
                     if (ps.getIacfAmount() != null) {
                         context.setActualIacfIncurred(ps.getIacfAmount());
                         logger.logText("DEBUG: Set ActualIacfIncurred from DB: " + ps.getIacfAmount());
@@ -437,10 +399,6 @@ public class GroupLifecycleSimulationService {
                         // [修复] 使用PV数据中的预期获取费用现值作为实际发生额
                         context.setActualIacfIncurred(pvIacf);
                         logger.logText("DEBUG: Set ActualIacfIncurred from PV: " + pvIacf);
-                    } else if (assumptions != null && assumptions.getAcquisitionExpenseRatio() != null && ps.getWrittenPremium() != null) {
-                        BigDecimal actualIacf = ps.getWrittenPremium().multiply(assumptions.getAcquisitionExpenseRatio());
-                        context.setActualIacfIncurred(actualIacf);
-                        logger.logText("DEBUG: Set ActualIacfIncurred from Ratio: " + actualIacf);
                     }
                 } else {
                     context.setActualPremium(BigDecimal.ZERO);
@@ -449,11 +407,11 @@ public class GroupLifecycleSimulationService {
                 }
 
                 // --- 核心计算逻辑 ---
-                String pUnitId = (ps.getCertiNo() != null && !ps.getCertiNo().isEmpty()) ? ps.getPolicyNo() + "-" + ps.getCertiNo() : ps.getPolicyNo();
+                String pUnitId =  ps.getPolicyNo() + ps.getCertiNo();
                 context.setUnitId(pUnitId);
                 logger.logText("#### [年度初始计算] 处理保单: " + pUnitId);
 
-                // [修复] 1. 履约现金流变化 (Fulfillment Cashflow Changes) - 对应 Python Part 2 & 4
+                // 1. 履约现金流变化(精算假设变动对未来现金流的影响)
                 fulfillmentCashflowChangesService.run(
                     context,
                     logger,
@@ -463,19 +421,20 @@ public class GroupLifecycleSimulationService {
                     isNewBusiness
                 );
 
-                // [修复] 2. CSM 计息 (Part 3)
+                // 2. CSM 计息 (Part 3)
                 csmLcMeasurementService.calculateCsmInterest(context, logger, groupState, ps);
 
-                // [修复] 3. LC 分摊 IFIE (Part 7 - 前置部分)
+                // 3. LC 分摊 IFIE (Part 7 - 前置部分)
                 csmLcMeasurementService.calculateLcIfieAllocation(context, logger, groupState);
 
-                // [修复] 4. IACF 摊销 (Part 6)
+                //  4. IACF 摊销 (Part 6)
+                //TODO 逻辑太啰嗦重复
                 iacfAmortizationService.run(context, logger);
 
-                // [修复] 5. IFIE 计算 (Part 8)
+                //  5. IFIE 计算 (Part 8)
                 ifieService.run(context, logger, assumptions, groupState);
 
-                // [修复] 6. 期末未到期责任负债 (LRC Closing) - 仅计算部分，后续还会更新
+                //  6. 期末未到期责任负债 (LRC Closing) - 仅计算部分，后续还会更新
                 lrcClosingService.runClosing(context, logger);
 
                 policyContexts.add(context);
@@ -488,17 +447,15 @@ public class GroupLifecycleSimulationService {
             // 组级别汇总 & 分配
             logger.logSection("第二部分: 合同组状态判定");
 
-            // [Modified] 组级别不再进行批减单特殊判定。
             // 逐单计算中已正确处理了批减单的CSM/LC符号（正常单CSM>0/LC<0，批减单CSM<0/LC>0）。
             // 组级别只需将各保单结果汇总（代数相加），然后按统一标准（Net Trial >= 0 为 CSM）判断即可。
-            boolean isReversal = false;
-
+            //同一个合同组内的保单险类是相同的，所以可以直接取第一个保单的假设
             Assumptions currentAssumptions = policyContexts.get(0).getAssumptions();
 
             List<PolicyContextInput> inputs = groupCsmLcMeasurementService.collectPolicyData(policyContexts);
-            GroupStatusResult groupStatus = groupCsmLcMeasurementService.calculateGroupStatus(inputs, isReversal, logger);
+            GroupStatusResult groupStatus = groupCsmLcMeasurementService.calculateGroupStatus(inputs, logger);
 
-            groupCsmLcMeasurementService.allocateGroupCsmLcToPolicies(inputs, groupStatus, policyContexts, isReversal, logger);
+            groupCsmLcMeasurementService.allocateGroupCsmLcToPolicies(inputs, groupStatus, policyContexts, logger);
 
             // 更新组级状态
             groupState.setNetTrial(groupStatus.getNetTrial());
@@ -532,7 +489,7 @@ public class GroupLifecycleSimulationService {
             // [第三部分-步骤3&4] 组级别计算被LC/CSM吸收的变化并分摊到各保单
             logger.logText("### [第三部分-步骤3&4] 组级别计算被LC/CSM吸收的变化并分摊到各保单");
             GroupAbsorptionResult absorptionResult = groupCsmLcMeasurementService.runGroupAbsorptionAllocation(
-                    policyContexts, groupStatus, logger, isReversal, currentAssumptions,year
+                    policyContexts, groupStatus, logger, currentAssumptions,year
             );
 
             System.out.println("[DEBUG-BBA] " + year + " 组吸收计算结果: csmAbsorbed=" + absorptionResult.getGroupCsmAbsorbedTotal() + ", lcAbsorbed=" + absorptionResult.getGroupLcAbsorbedTotal());
@@ -595,18 +552,14 @@ public class GroupLifecycleSimulationService {
                 String targetUnitId = ctx.getUnitId();
                 if (targetUnitId == null) {
                      // 如果 ctx 中没有 unitId（理论上不应该，因为之前已经设置了），尝试构建
-                     targetUnitId = (ctx.getCertiNo() != null && !ctx.getCertiNo().isEmpty())
-                                    ? ctx.getPolicyNo() + "-" + ctx.getCertiNo()
-                                    : ctx.getPolicyNo();
+                     targetUnitId = ctx.getCertiNo()+ ctx.getCertiNo();
                 }
 
                 String finalTargetUnitId = targetUnitId; // effective final for lambda
 
                 GroupPolicyState ps = groupState.getGroupPolicies().stream()
                         .filter(p -> {
-                            String pUnitId = (p.getCertiNo() != null && !p.getCertiNo().isEmpty())
-                                             ? p.getPolicyNo() + "-" + p.getCertiNo()
-                                             : p.getPolicyNo();
+                            String pUnitId = p.getUnitId();
                             return pUnitId.equals(finalTargetUnitId);
                         })
                         .findFirst()

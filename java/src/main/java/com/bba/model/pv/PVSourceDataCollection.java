@@ -8,20 +8,20 @@ import java.util.Map;
 @Data
 @NoArgsConstructor
 public class PVSourceDataCollection {
-    private String policyNo;
+    private String unitId;
     private Map<String, PVSourceData> dataByMonth = new HashMap<>();
-    
-    public PVSourceDataCollection(String policyNo) {
-        this.policyNo = policyNo;
+
+    public PVSourceDataCollection(String unitId) {
+        this.unitId = unitId;
     }
-    
+
     public void addData(PVSourceData pvData) {
-        if (!pvData.getPolicyNo().equals(this.policyNo)) {
-            throw new IllegalArgumentException("Policy No mismatch: " + this.policyNo + " vs " + pvData.getPolicyNo());
+        if (!pvData.getUnitId().equals(this.unitId)) {
+            throw new IllegalArgumentException("Unit ID mismatch: " + this.unitId + " vs " + pvData.getUnitId());
         }
         this.dataByMonth.put(pvData.getValuationMonth(), pvData);
     }
-    
+
     public PVSourceData getData(String valuationMonth) {
         return this.dataByMonth.get(valuationMonth);
     }

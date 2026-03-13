@@ -2,9 +2,7 @@ package com.bba.service;
 
 import com.bba.entity.PolicyContract;
 import com.bba.entity.RateCurve;
-import com.bba.entity.SummaryIacfCost;
 import com.bba.mapper.SummaryIacfCostMapper;
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.bba.model.Assumptions;
 import com.bba.model.CalculationContext;
 import com.bba.model.CashFlow;
@@ -18,7 +16,6 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 /**
  * PV生成服务类。
@@ -30,13 +27,6 @@ import java.util.stream.Collectors;
 @Slf4j
 @RequiredArgsConstructor
 public class PVGeneratorService {
-
-    // 默认精算假设（已移除，不再使用默认值，如果数据库缺失则报错）
-    // private static final BigDecimal DEFAULT_LOSS_RATIO = new BigDecimal("0.60");
-    // private static final BigDecimal DEFAULT_INDIRECT_CLAIM_EXP_RATIO = BigDecimal.ZERO;
-    // private static final BigDecimal DEFAULT_MAINT_RATIO = new BigDecimal("0.05");
-    // private static final BigDecimal DEFAULT_RA_RATIO = new BigDecimal("0.06");
-
     // 注入数据加载服务，用于获取利率和假设
     private final DataLoaderService dataLoaderService;
     // 注入现金流预测服务，用于生成现金流
@@ -64,9 +54,10 @@ public class PVGeneratorService {
         CalculationContext context = new CalculationContext();
         context.setPolicyData(policy);
         context.setPolicyNo(policy.getPolicyNo());
+        //在过渡期PV现值计算则为从签单年末，到评估期末
         context.setValuationDate(valuationDate);
         context.setYear(valuationDate.getYear());
-
+        //生成PV源材料数据
         calculate(context);
 
         return context.getCurrentPvData();
@@ -83,7 +74,7 @@ public class PVGeneratorService {
         // 创建新的 PVSourceData 对象，用于存储结果
         PVSourceData pvData = new PVSourceData();
         // 设置保单号
-        pvData.setPolicyNo(policy.getPolicyNo());
+        pvData.setUnitId(policy.getPolicyNo()+policy.getCertiNo());
         // 设置评估日期
         pvData.setValuationDate(valuationDate);
         // 设置评估月份（格式为 yyyyMM）
@@ -159,7 +150,7 @@ public class PVGeneratorService {
         if (assumpUw != null) {
             cfUw = cashFlowProjectorService.projectPolicyFlows(policy, assumpUw);
         } else {
-            log.warn("由于假设缺失，跳过签单现金流预测。");
+            log.error("由于假设缺失，跳过签单现金流预测。");
             cfUw = new ArrayList<>();
         }
 
@@ -168,7 +159,7 @@ public class PVGeneratorService {
         if (assumpVal != null) {
             cfVal = cashFlowProjectorService.projectPolicyFlows(policy, assumpVal);
         } else {
-            log.warn("由于假设缺失，跳过期末现金流预测。");
+            log.error("由于假设缺失，跳过期末现金流预测。");
             cfVal = new ArrayList<>();
         }
 
@@ -180,7 +171,7 @@ public class PVGeneratorService {
             if (assumpPrevYe != null) {
                 cfPrevYe = cashFlowProjectorService.projectPolicyFlows(policy, assumpPrevYe);
             } else {
-                log.warn("由于假设缺失，跳过期初现金流预测。");
+                log.error("由于假设缺失，跳过期初现金流预测。");
                 cfPrevYe = new ArrayList<>();
             }
         }
@@ -352,43 +343,10 @@ public class PVGeneratorService {
     ) {
         LocalDate startOfYear = LocalDate.of(bopDate.getYear(), 1, 1);
         LocalDate valDate = LocalDate.of(bopDate.getYear(), 12, 31);
-
-        // 1 & 2. If_Bop_Cca_Rep_Wlk & If_Bop_Cfa_Rep_Wlk
-        // Split at EOP (Dec 31)
         processSplitAndPut(fields, "Pvfl_If_Bop_Cca_Rep_Wlk", "Pvfl_If_Bop_Cfa_Rep_Wlk",
                 cf, lockedRates, startOfYear, valDate, uwDate, assumptions);
-
-        // 3. If_Bop_Cfa_Beg_Lcu
-        // "Beg" fields include ALL flows from Jan 1 onwards (Cca + Cfa)
-        // Treated as "Future" (Cfa) relative to Jan 1 (Start of Day)
-        // So splitDate = Jan 1 minus 1 day
         LocalDate prevYe = startOfYear.minusDays(1);
-
-        // Use lcuRates (Previous Year End Locked)
-        // Only output Cfa part (which includes everything >= Jan 1)
-        // Note: processSplitAndPut puts Cca to first prefix, Cfa to second prefix.
-        // We only want the Cfa part here, mapped to "If_Bop_Cfa_Beg_Lcu".
-        // And Cca part (before Jan 1) should be ignored or empty if startDate=Jan1.
-        // Wait, startDate is Jan 1. SplitDate is Jan 1 minus 1.
-        // So everything >= Jan 1 is > SplitDate -> Cfa.
-        // Cca is empty.
-
-        // Special helper or reuse?
-        // We can reuse processSplitAndPut but pass null for Cca prefix?
-        // Or just call pvCalculatorService directly.
-
-        PVCalculatorService.PvSplitResult splitLcu = pvCalculatorService.calculatePvSplit(
-                cf, CashFlow::getClaims, lcuRates, startOfYear, prevYe, prevYe); // valueExtractor placeholder
-
-        // We need to do it for Pre, Acq, Cla, Mtn separately...
-        // Let's use a helper that doesn't put to map immediately?
-        // Or a helper that accepts target prefixes.
-
         processBegLcu(fields, "Pvfl_If_Bop_Cfa_Beg_Lcu", cf, lcuRates, startOfYear, prevYe, assumptions);
-
-        // 4. If_Bop_Cfa_Beg_Wlk (Locked Rates)
-        // Similar to Beg_Lcu but using Locked Rates (Wlk) and UW Date as base
-        // Note: IfieService expects "Wlk" suffix for Beg fields (e.g. Pvfl_If_Bop_Cfa_Beg_Wlk_Cla_Amt)
         processBegLcu(fields, "Pvfl_If_Bop_Cfa_Beg_Wlk", cf, lockedRates, startOfYear, prevYe, assumptions, uwDate);
     }
 
@@ -474,15 +432,8 @@ public class PVGeneratorService {
             Assumptions assumptions,
             LocalDate curveBaseDate
     ) {
-        // We only care about Cfa (Future relative to splitDate)
         PVCalculatorService.PvSplitResult cla = pvCalculatorService.calculatePvSplit(cf, CashFlow::getClaims, rates, startDate, splitDate, curveBaseDate);
         PVCalculatorService.PvSplitResult mtn = pvCalculatorService.calculatePvSplit(cf, CashFlow::getExpenses, rates, startDate, splitDate, curveBaseDate);
-
-        // Beg fields only have Cla/Mtn/Rad usually in Python output logic?
-        // Original code:
-        // fields.put("Pvfl_If_Bop_Cfa_Beg_Lcu_Cla_Amt", claLcu);
-        // ...
-        // fields.put("Pvfl_If_Bop_Cfa_Beg_Wlk_Cla_Amt", claBegWlk);
 
         BigDecimal claAmt = cla.getCfaAmount();
         BigDecimal mtnAmt = mtn.getCfaAmount();
@@ -491,9 +442,6 @@ public class PVGeneratorService {
         fields.put(prefix + "_Cla_Amt", claAmt);
         fields.put(prefix + "_Mtn_Amt", mtnAmt);
         fields.put(prefix + "_Rad_Amt", radAmt);
-
-        // Should we set Pre/Acq to zero?
-        // Original code didn't set them for Beg fields explicitly or set them to 0 in zeroOutIfBop.
     }
 
     private void putFields(

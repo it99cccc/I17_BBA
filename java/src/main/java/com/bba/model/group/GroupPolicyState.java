@@ -11,13 +11,19 @@ import lombok.ToString;
 public class GroupPolicyState extends PolicyState {
     private String groupId;
     private String portfolioId;
-    private String certiNo;
     private String uwMonthStr;
     private String classCode;
     private java.math.BigDecimal iacfAmount;
     private java.math.BigDecimal initialCsmForWeight;
 
+    /**
+     * 初始预期现金流_含亏损
+     */
     private java.math.BigDecimal initialLcCf;
+
+    /**
+     * 初始ra_含亏损
+     */
     private java.math.BigDecimal initialLcRa;
 
     /**
@@ -33,7 +39,7 @@ public class GroupPolicyState extends PolicyState {
      */
     private java.math.BigDecimal bopLcCf;
     /**
-     * 期初非金融风险调整
+     * 期初ra
      */
     private java.math.BigDecimal bopLcRa;
     /**

@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.Map;
@@ -45,27 +46,27 @@ public class PVSourceLoaderService {
      * @param policy 保单数据对象
      * @return 包含关键月份 PV 数据的集合
      */
-    public PVSourceDataCollection generatePvSourceData(PolicyContract policy) {
+    public PVSourceDataCollection generatePvSourceData(PolicyContract policy,String runDate) {
         if (policy == null) {
             log.error("❌ 保单数据为空 (Policy is null)");
             return null;
         }
-        String policyNo = policy.getPolicyNo();
+        String unitId = policy.getPolicyNo()+policy.getCertiNo();
 
         // 记录日志：开始生成 PV 原材料数据集合
-        log.info("正在生成 PV 原材料数据集合，保单号: {}", policyNo);
+        log.info("正在生成 PV 原材料数据集合，保单ID: {}", unitId);
 
         // 创建 PVSourceDataCollection 对象，用于存储所有月份的数据
-        PVSourceDataCollection collection = new PVSourceDataCollection(policyNo);
+        PVSourceDataCollection collection = new PVSourceDataCollection(unitId);
         // 保单签单日期
         LocalDate underWriteDate = policy.getUnderWriteDate();
         // 保单止期
         LocalDate endDate = policy.getEndDate();
 
-        // TODO: 暂时处理：只测算到配置的最大年份，超过部分不生成结果
-        int maxSimYear = BbaConstants.MAX_SIMULATION_YEAR;
-        LocalDate simulationEndDate = LocalDate.of(maxSimYear, 12, 31);
-        if (endDate.getYear() < maxSimYear) {
+//        int maxSimYear = BbaConstants.MAX_SIMULATION_YEAR;
+//        LocalDate simulationEndDate = LocalDate.of(maxSimYear, 12, 31);
+        LocalDate simulationEndDate = YearMonth.parse(runDate, DateTimeFormatter.ofPattern("yyyyMM")).atEndOfMonth();
+        if (endDate.getYear() < simulationEndDate.getYear()) {
              simulationEndDate = LocalDate.of(endDate.getYear(), 12, 31);
         }
 
@@ -82,8 +83,13 @@ public class PVSourceLoaderService {
 
         // 2. 循环添加每年末
         for (int year = startYear; year <= endYear; year++) {
-            // 添加年末 (12-31) - 用于期末计量 (EOP)
-            targetDates.add(LocalDate.of(year, 12, 31));
+            if(year == endYear){
+                targetDates.add(simulationEndDate);
+            }else {
+                // 添加保单保修责任止期到止期前每个年末日期
+                targetDates.add(LocalDate.of(year, 12, 31));
+            }
+
         }
 
         // 记录日志：模拟的关键时点数量
@@ -118,7 +124,6 @@ public class PVSourceLoaderService {
 
     /**
      * 通过模拟整个生命周期为保单生成 PV 原材料数据。
-     * 复刻 Python 脚本生成每个月 PV 数据的逻辑。
      *
      * @param policyNo 保单号
      * @param runDate 运行日期（YYYY-MM-DD），用于获取保单数据
@@ -133,6 +138,6 @@ public class PVSourceLoaderService {
             log.error("❌ 未找到保单: {}", policyNo);
             return null;
         }
-        return generatePvSourceData(policy);
+        return generatePvSourceData(policy,runDate);
     }
 }

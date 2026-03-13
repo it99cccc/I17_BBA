@@ -23,7 +23,7 @@ public class LrcClosingService {
         // 1. 预期现金流现值 (BEL)
         String eopMonthStr = context.getEopDate() != null ? context.getEopDate().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMM")) : context.getValMonthStr();
         PVSourceData pvData = context.getPvSourceData().getData(eopMonthStr);
-        
+
         logger.logText("LRC Calculation - EOP Month: " + eopMonthStr);
         if (pvData == null) {
             logger.logText("⚠️ PV Data not found for " + eopMonthStr + ", attempting fallback...");
@@ -53,16 +53,16 @@ public class LrcClosingService {
             BigDecimal ifMaint = pvData.getField("Pvfl_If_Eop_Cfa_Rep_Cur_Mtn_Amt", BigDecimal.ZERO);
             BigDecimal ifPrem = pvData.getField("Pvfl_If_Eop_Cfa_Rep_Cur_Pre_Amt", BigDecimal.ZERO);
             BigDecimal ifIacf = pvData.getField("Pvfl_If_Eop_Cfa_Rep_Cur_Acq_Amt", BigDecimal.ZERO);
-            
+
             // 新增合同 (如果存在)
             BigDecimal nbClaims = pvData.getField("Pvfl_Nb_Eop_Cfa_Rep_Cur_Cla_Amt", BigDecimal.ZERO);
             BigDecimal nbMaint = pvData.getField("Pvfl_Nb_Eop_Cfa_Rep_Cur_Mtn_Amt", BigDecimal.ZERO);
             BigDecimal nbPrem = pvData.getField("Pvfl_Nb_Eop_Cfa_Rep_Cur_Pre_Amt", BigDecimal.ZERO);
             BigDecimal nbIacf = pvData.getField("Pvfl_Nb_Eop_Cfa_Rep_Cur_Acq_Amt", BigDecimal.ZERO);
-            
+
             logger.logText(String.format("BEL Components (IF): Claims=%s, Maint=%s, Prem=%s, IACF=%s", ifClaims, ifMaint, ifPrem, ifIacf));
             logger.logText(String.format("BEL Components (NB): Claims=%s, Maint=%s, Prem=%s, IACF=%s", nbClaims, nbMaint, nbPrem, nbIacf));
-            
+
             pvEopClaimsCurrent = ifClaims.add(nbClaims);
             pvEopMaintCurrent = ifMaint.add(nbMaint);
             pvEopPremCurrent = ifPrem.add(nbPrem);
@@ -71,7 +71,7 @@ public class LrcClosingService {
 
         context.setPvEopClaimsCurrent(pvEopClaimsCurrent);
         context.setPvEopMaintCurrent(pvEopMaintCurrent);
-        
+
         // LRC BEL Total = -Premium + IACF + Claims + Maint
         // Note: Premium is inflow (Asset), so it reduces Liability.
         BigDecimal lrcBelTotal = pvEopPremCurrent.negate()
@@ -101,7 +101,7 @@ public class LrcClosingService {
             lrcRa = ifRa.add(nbRa);
         }
         context.setLrcRa(lrcRa);
-        
+
         logger.logItem(
                 "未到期责任负债_非金融风险调整",
                 "期末RA现值",
@@ -112,7 +112,7 @@ public class LrcClosingService {
 
         // 3. CSM
         BigDecimal endCsm = context.getEndCsmFinal() != null ? context.getEndCsmFinal() : (context.getEndCsmBeforeAmort() != null ? context.getEndCsmBeforeAmort() : BigDecimal.ZERO);
-        
+
         logger.logItem(
                 "未到期责任负债_CSM",
                 "期末CSM余额",
@@ -132,15 +132,5 @@ public class LrcClosingService {
                 new HashMap<String, Object>(),
                 lrcTotal
         );
-        
-        // Split logic (Loss Component)
-        BigDecimal endLcCf = context.getEndLcCf() != null ? context.getEndLcCf() : BigDecimal.ZERO;
-        BigDecimal endLcRa = context.getEndLcRa() != null ? context.getEndLcRa() : BigDecimal.ZERO;
-        
-        BigDecimal lrcBelLc = endLcCf; // Positive representation of negative liability?
-        // In Python: `lrc_bel_lc = end_lc_cf`
-        BigDecimal lrcRaLc = endLcRa.negate();
-        
-        // ... logging split ...
     }
 }

@@ -119,6 +119,7 @@ public class IacfAmortizationService {
             //摊销比例
             iacfAmortRatio = cuReleasedIacf.divide(denominatorIacf, 10, BigDecimal.ROUND_HALF_UP);
 
+            //TODO IACF摊销比例可以复用CSM的
             Map<String, Object> metaRatio = new HashMap<>();
             metaRatio.put("CU_released", cuReleasedIacf);
             metaRatio.put("CU_remaining", cuRemainingIacf);

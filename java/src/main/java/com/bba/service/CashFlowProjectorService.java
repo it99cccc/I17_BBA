@@ -10,6 +10,7 @@ import java.math.BigDecimal;
 import java.math.MathContext;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
@@ -19,8 +20,7 @@ import java.util.List;
 public class CashFlowProjectorService {
 
     /**
-     * 为单个保单构建月度现金流序列。
-     * 复制了Python版本中 CashFlowProjector.project_policy_flows 的逻辑
+     * 为单个保单构建不同时点精算假设对应的现金流。
      */
     public List<CashFlow> projectPolicyFlows(PolicyContract policy, Assumptions assumptions) {
         // 从保单对象中获取不含税的总保费，如果为null则默认为0
@@ -56,20 +56,9 @@ public class CashFlowProjectorService {
         // 取保险起期和签单日期中较早的那个
         LocalDate timelineStart = startDate.isBefore(uwDate) ? startDate : uwDate;
 
-        // 确定风险期间：仅在保修期结束之后
-        LocalDate riskStart = warrantyEnd;
-        // 风险结束日期即为保险止期
-        LocalDate riskEnd = endDate;
-
-        // 将风险开始日期规范化为当月的第一天
-        LocalDate riskStartMonth = riskStart.withDayOfMonth(1);
-        // 将风险结束日期规范化为当月的第一天
-        LocalDate riskEndMonth = riskEnd.withDayOfMonth(1);
-
         // 计算风险开始年月到风险结束年月经过的月份数
-        long coverageMonths = ChronoUnit.MONTHS.between(riskStartMonth, riskEndMonth) +1;
-        log.info("Projecting flows for Policy: {}, RiskStart: {}, RiskEnd: {}, CoverageMonths: {}",
-                policy.getPolicyNo(), riskStartMonth, riskEndMonth, coverageMonths);
+        long coverageMonths = ChronoUnit.MONTHS.between(YearMonth.from(warrantyEnd), YearMonth.from(endDate)) +1;
+
         // 初始化理赔和费用为0
         BigDecimal claims = BigDecimal.ZERO;
         BigDecimal expenses = BigDecimal.ZERO;
@@ -122,7 +111,7 @@ public class CashFlowProjectorService {
                 iacfOutflow = iacfAmount;
             }
             //如果当前月大于等于保障起期，则进入风险期，记录赔付和维持费用
-            if(currentMonth.isEqual(riskStartMonth) || currentMonth.isAfter(riskStartMonth)){
+            if(currentMonth.isEqual(warrantyEnd.withDayOfMonth(1)) || currentMonth.isAfter(warrantyEnd.withDayOfMonth(1))){
                 claimsflow = claims;
                 expensesflow = expenses;
             }
