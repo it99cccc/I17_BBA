@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
 public class GroupCsmLcMeasurementService {
@@ -22,106 +23,13 @@ public class GroupCsmLcMeasurementService {
     private static final BigDecimal DECIMAL_100 = new BigDecimal("100");
 
     /**
-     * 收集保单数据以进行组级别计算
-     * 从 CalculationContext 列表中提取必要字段构建 PolicyContextInput 列表
-     *
-     * @param contexts 计算上下文列表
-     * @return 保单上下文输入列表
-     */
-    public List<PolicyContextInput> collectPolicyData(List<CalculationContext> contexts) {
-        List<PolicyContextInput> policyInputs = new ArrayList<>();
-
-        for (int i = 0; i < contexts.size(); i++) {
-            CalculationContext ctx = contexts.get(i);
-
-            // [FIX] 在数据收集阶段就立即构建并设置 unitId，确保全链路唯一性
-            String unitId = ctx.getPolicyNo()+ctx.getCertiNo();
-            ctx.setUnitId(unitId);
-
-            BigDecimal bopCsm = ctx.getBopCsm() != null ? ctx.getBopCsm() : DECIMAL_ZERO;
-            BigDecimal bopLc = ctx.getBopLc() != null ? ctx.getBopLc() : DECIMAL_ZERO;
-            BigDecimal bopLcCf = ctx.getBopLcCf() != null ? ctx.getBopLcCf() : DECIMAL_ZERO;
-            BigDecimal bopLcRa = ctx.getBopLcRa() != null ? ctx.getBopLcRa() : DECIMAL_ZERO;
-            BigDecimal nbInitialCsm = ctx.getNbInitialCsm() != null ? ctx.getNbInitialCsm() : DECIMAL_ZERO;
-            BigDecimal nbInitialLc = ctx.getNbInitialLc() != null ? ctx.getNbInitialLc() : DECIMAL_ZERO;
-
-            boolean isIf = (bopCsm.compareTo(DECIMAL_ZERO) != 0 || bopLc.compareTo(DECIMAL_ZERO) != 0);
-
-            BigDecimal ifInterestCsm = ctx.getIfInterestCsm() != null ? ctx.getIfInterestCsm() : DECIMAL_ZERO;
-            BigDecimal nbInterestCsm = ctx.getNbInterestCsm() != null ? ctx.getNbInterestCsm() : DECIMAL_ZERO;
-            BigDecimal ifLcIfieTotal = ctx.getIfLcIfieTotal() != null ? ctx.getIfLcIfieTotal() : DECIMAL_ZERO;
-            BigDecimal nbLcIfieTotal = ctx.getNbLcIfieTotal() != null ? ctx.getNbLcIfieTotal() : DECIMAL_ZERO;
-
-            BigDecimal csmAfterInterest;
-            if (isIf) {
-                csmAfterInterest = bopCsm.add(ifInterestCsm);
-            } else {
-                csmAfterInterest = nbInitialCsm.add(nbInterestCsm);
-            }
-
-            BigDecimal lcAfterIfie;
-            if (isIf) {
-                lcAfterIfie = bopLc.add(ifLcIfieTotal);
-            } else {
-                lcAfterIfie = nbInitialLc.add(nbLcIfieTotal);
-            }
-
-            BigDecimal deltaTotal = ctx.getExpAdjCsmImpact() != null ? ctx.getExpAdjCsmImpact() : DECIMAL_ZERO;
-            BigDecimal deltaCf = ctx.getDeltaCfTotal() != null ? ctx.getDeltaCfTotal() : DECIMAL_ZERO;
-            BigDecimal deltaRa = deltaTotal.subtract(deltaCf);
-
-            BigDecimal allocatedLcTotal = ctx.getAllocatedLcTotal() != null ? ctx.getAllocatedLcTotal() : DECIMAL_ZERO;
-            BigDecimal allocatedLcCf = ctx.getAllocatedLcCf() != null ? ctx.getAllocatedLcCf() : DECIMAL_ZERO;
-            BigDecimal allocatedLcRa = ctx.getAllocatedLcRa() != null ? ctx.getAllocatedLcRa() : DECIMAL_ZERO;
-
-            BigDecimal ifLcIfieCf = ctx.getIfLcIfieCf() != null ? ctx.getIfLcIfieCf() : DECIMAL_ZERO;
-            BigDecimal nbLcIfieCf = ctx.getNbLcIfieCf() != null ? ctx.getNbLcIfieCf() : DECIMAL_ZERO;
-            BigDecimal ifLcIfieRa = ctx.getIfLcIfieRa() != null ? ctx.getIfLcIfieRa() : DECIMAL_ZERO;
-            BigDecimal nbLcIfieRa = ctx.getNbLcIfieRa() != null ? ctx.getNbLcIfieRa() : DECIMAL_ZERO;
-
-            BigDecimal nbInitialLcCf = ctx.getNbInitialLcCf() != null ? ctx.getNbInitialLcCf() : DECIMAL_ZERO;
-            BigDecimal nbInitialLcRa = ctx.getNbInitialLcRa() != null ? ctx.getNbInitialLcRa() : DECIMAL_ZERO;
-
-            policyInputs.add(PolicyContextInput.builder()
-                    .unitId(unitId)
-                    .isIf(isIf)
-                    .bopCsm(bopCsm)
-                    .bopLc(bopLc)
-                    .bopLcCf(bopLcCf)
-                    .bopLcRa(bopLcRa)
-                    .nbInitialCsm(nbInitialCsm)
-                    .nbInitialLc(nbInitialLc)
-                    .ifInterestCsm(ifInterestCsm)
-                    .nbInterestCsm(nbInterestCsm)
-                    .ifLcIfieTotal(ifLcIfieTotal)
-                    .nbLcIfieTotal(nbLcIfieTotal)
-                    .csmAfterInterest(csmAfterInterest)
-                    .lcAfterIfie(lcAfterIfie)
-                    .deltaTotal(deltaTotal)
-                    .deltaCf(deltaCf)
-                    .deltaRa(deltaRa)
-                    .allocatedLcTotal(allocatedLcTotal)
-                    .allocatedLcCf(allocatedLcCf)
-                    .allocatedLcRa(allocatedLcRa)
-                    .ifLcIfieCf(ifLcIfieCf)
-                    .nbLcIfieCf(nbLcIfieCf)
-                    .ifLcIfieRa(ifLcIfieRa)
-                    .nbLcIfieRa(nbLcIfieRa)
-                    .nbInitialLcCf(nbInitialLcCf)
-                    .nbInitialLcRa(nbInitialLcRa)
-                    .build());
-        }
-        return policyInputs;
-    }
-
-    /**
      * 计算合同组的状态 (CSM vs LC)
      *
      * @param policyInputs 保单输入数据列表
      * @param logger       日志记录器
      * @return 合同组状态结果对象
      */
-    public GroupStatusResult calculateGroupStatus(List<PolicyContextInput> policyInputs, CalculationLogger logger) {
+    public GroupStatusResult calculateGroupStatus(List<IPolicyGroupCalculationInput> policyInputs, CalculationLogger logger) {
         if (logger != null) {
             logger.logSection("第二部分：合同组状态判定");
             logger.logText("#### 步骤1：汇总合同组CSM/LC（计息后/分摊后）");
@@ -132,7 +40,7 @@ public class GroupCsmLcMeasurementService {
         BigDecimal ifLcAfterIfie = DECIMAL_ZERO;
         BigDecimal nbLcAfterIfie = DECIMAL_ZERO;
 
-        for (PolicyContextInput p : policyInputs) {
+        for (IPolicyGroupCalculationInput p : policyInputs) {
             if (p.isIf()) {
                 ifCsmAfterInterest = ifCsmAfterInterest.add(p.getBopCsm()).add(p.getIfInterestCsm());
                 ifLcAfterIfie = ifLcAfterIfie.add(p.getBopLc()).add(p.getIfLcIfieTotal());
@@ -194,7 +102,7 @@ public class GroupCsmLcMeasurementService {
      * @param contexts     计算上下文列表 (用于回写分摊结果)
      * @param logger       日志记录器
      */
-    public void allocateGroupCsmLcToPolicies(List<PolicyContextInput> policyInputs, GroupStatusResult groupStatus, List<CalculationContext> contexts, CalculationLogger logger) {
+    public void allocateGroupCsmLcToPolicies(List<IPolicyGroupCalculationInput> policyInputs, GroupStatusResult groupStatus, List<CalculationContext> contexts, CalculationLogger logger) {
         BigDecimal cohortCsm = groupStatus.getCohortCsm();
         BigDecimal cohortLc = groupStatus.getCohortLc();
 
@@ -218,7 +126,7 @@ public class GroupCsmLcMeasurementService {
         // 1. CSM 分摊
         if (cohortCsm.compareTo(DECIMAL_ZERO) != 0) {
             BigDecimal totalCsmAfterInterest = policyInputs.stream()
-                    .map(PolicyContextInput::getCsmAfterInterest)
+                    .map(IPolicyGroupCalculationInput::getCsmAfterInterest)
                     .filter(csm -> csm.compareTo(DECIMAL_ZERO) > 0)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
 
@@ -227,7 +135,7 @@ public class GroupCsmLcMeasurementService {
             }
 
             if (totalCsmAfterInterest.compareTo(DECIMAL_ZERO) > 0) {
-                for (PolicyContextInput p : policyInputs) {
+                for (IPolicyGroupCalculationInput p : policyInputs) {
                     CalculationContext ctx = unitIdToContext.get(p.getUnitId());
                     if (ctx == null) {
                         continue;
@@ -247,13 +155,13 @@ public class GroupCsmLcMeasurementService {
                     }
                 }
             } else {
-                for (PolicyContextInput p : policyInputs) {
+                for (IPolicyGroupCalculationInput p : policyInputs) {
                     CalculationContext ctx = unitIdToContext.get(p.getUnitId());
                     if (ctx != null) ctx.setAllocatedGroupCsm(DECIMAL_ZERO);
                 }
             }
         } else {
-            for (PolicyContextInput p : policyInputs) {
+            for (IPolicyGroupCalculationInput p : policyInputs) {
                 CalculationContext ctx = unitIdToContext.get(p.getUnitId());
                 if (ctx != null) ctx.setAllocatedGroupCsm(DECIMAL_ZERO);
             }
@@ -262,9 +170,9 @@ public class GroupCsmLcMeasurementService {
         // 2. LC 分摊
         if (cohortLc.compareTo(DECIMAL_ZERO) != 0) {
             BigDecimal totalLcAfterIfie = DECIMAL_ZERO;
-            List<PolicyContextInput> validPolicies = new ArrayList<>();
+            List<IPolicyGroupCalculationInput> validPolicies = new ArrayList<>();
 
-            for (PolicyContextInput p : policyInputs) {
+            for (IPolicyGroupCalculationInput p : policyInputs) {
                 boolean isLcPolicy = p.getLcAfterIfie().compareTo(DECIMAL_ZERO) < 0;
                 if (isLcPolicy && p.getLcAfterIfie().compareTo(DECIMAL_ZERO) != 0) {
                     totalLcAfterIfie = totalLcAfterIfie.add(p.getLcAfterIfie());
@@ -278,7 +186,7 @@ public class GroupCsmLcMeasurementService {
             }
 
             if (totalLcAfterIfie.compareTo(DECIMAL_ZERO) != 0) {
-                for (PolicyContextInput p : policyInputs) {
+                for (IPolicyGroupCalculationInput p : policyInputs) {
                     CalculationContext ctx = unitIdToContext.get(p.getUnitId());
                     if (ctx == null) continue;
 
@@ -297,13 +205,13 @@ public class GroupCsmLcMeasurementService {
                     }
                 }
             } else {
-                for (PolicyContextInput p : policyInputs) {
+                for (IPolicyGroupCalculationInput p : policyInputs) {
                     CalculationContext ctx = unitIdToContext.get(p.getUnitId());
                     if (ctx != null) ctx.setAllocatedGroupLc(DECIMAL_ZERO);
                 }
             }
         } else {
-            for (PolicyContextInput p : policyInputs) {
+            for (IPolicyGroupCalculationInput p : policyInputs) {
                 CalculationContext ctx = unitIdToContext.get(p.getUnitId());
                 if (ctx != null) ctx.setAllocatedGroupLc(DECIMAL_ZERO);
             }
@@ -320,7 +228,7 @@ public class GroupCsmLcMeasurementService {
      * @param assumptions  精算假设 (用于 CF/RA 拆分)
      * @return 组吸收计算结果
      */
-    public GroupAbsorptionResult calculateGroupAbsorption(List<PolicyContextInput> policyInputs, GroupStatusResult groupStatus, CalculationLogger logger, Assumptions assumptions,int year) {
+    public GroupAbsorptionResult calculateGroupAbsorption(List<IPolicyGroupCalculationInput> policyInputs, GroupStatusResult groupStatus, CalculationLogger logger, Assumptions assumptions,int year) {
         BigDecimal cohortCsm = groupStatus.getCohortCsm();
         BigDecimal cohortLc = groupStatus.getCohortLc();
         BigDecimal netTrial = groupStatus.getNetTrial();
@@ -329,15 +237,15 @@ public class GroupCsmLcMeasurementService {
             logger.logText("#### 步骤3：计算组级吸收变化");
         }
 
-        BigDecimal groupDeltaTotal = policyInputs.stream().map(PolicyContextInput::getDeltaTotal).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal groupDeltaTotal = policyInputs.stream().map(IPolicyGroupCalculationInput::getDeltaTotal).reduce(BigDecimal.ZERO, BigDecimal::add);
 
-        BigDecimal allocatedLcTotal = policyInputs.stream().map(PolicyContextInput::getAllocatedLcTotal).reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal bopLcTotal = policyInputs.stream().map(PolicyContextInput::getBopLc).reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal nbInitialLcTotal = policyInputs.stream().map(PolicyContextInput::getNbInitialLc).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal allocatedLcTotal = policyInputs.stream().map(IPolicyGroupCalculationInput::getAllocatedLcTotal).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal bopLcTotal = policyInputs.stream().map(IPolicyGroupCalculationInput::getBopLc).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal nbInitialLcTotal = policyInputs.stream().map(IPolicyGroupCalculationInput::getNbInitialLc).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal lcIfieTotal = policyInputs.stream().map(p -> p.getIfLcIfieTotal().add(p.getNbLcIfieTotal())).reduce(BigDecimal.ZERO, BigDecimal::add);
 
-        BigDecimal bopCsmTotal = policyInputs.stream().map(PolicyContextInput::getBopCsm).reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal nbInitialCsmTotal = policyInputs.stream().map(PolicyContextInput::getNbInitialCsm).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal bopCsmTotal = policyInputs.stream().map(IPolicyGroupCalculationInput::getBopCsm).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal nbInitialCsmTotal = policyInputs.stream().map(IPolicyGroupCalculationInput::getNbInitialCsm).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal csmInterestTotal = policyInputs.stream().map(p -> p.getIfInterestCsm().add(p.getNbInterestCsm())).reduce(BigDecimal.ZERO, BigDecimal::add);
 
         BigDecimal deltaCsmLcTotal = groupDeltaTotal;
@@ -409,11 +317,11 @@ public class GroupCsmLcMeasurementService {
      * @param assumptions  精算假设
      * @return 保单分摊结果列表
      */
-    public List<PolicyAllocationResult> allocateAbsorptionToPolicies(List<PolicyContextInput> policyInputs, GroupAbsorptionResult groupResult, Assumptions assumptions) {
+    public List<PolicyAllocationResult> allocateAbsorptionToPolicies(List<IPolicyGroupCalculationInput> policyInputs, GroupAbsorptionResult groupResult, Assumptions assumptions) {
         List<PolicyAllocationResult> allocationResults = new ArrayList<>();
 
         BigDecimal totalCsmAfterInterest = policyInputs.stream()
-                .map(PolicyContextInput::getCsmAfterInterest)
+                .map(IPolicyGroupCalculationInput::getCsmAfterInterest)
                 .filter(csm -> csm.compareTo(DECIMAL_ZERO) > 0)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
@@ -422,7 +330,7 @@ public class GroupCsmLcMeasurementService {
                 .map(p -> p.getLcAfterIfie().abs())
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-        for (PolicyContextInput p : policyInputs) {
+        for (IPolicyGroupCalculationInput p : policyInputs) {
             BigDecimal csmAbsorbed = DECIMAL_ZERO;
             BigDecimal csmAbsorbedCf = DECIMAL_ZERO;
             BigDecimal csmAbsorbedRa = DECIMAL_ZERO;
@@ -557,7 +465,7 @@ public class GroupCsmLcMeasurementService {
             logger.logSection("第三部分-步骤3&4: 组级吸收变化汇总与分摊");
         }
 
-        List<PolicyContextInput> policyInputs = collectPolicyData(contexts);
+        List<IPolicyGroupCalculationInput> policyInputs = new ArrayList<>(contexts);
         GroupAbsorptionResult groupResult = calculateGroupAbsorption(policyInputs, groupStatus, logger, assumptions,year);
         List<PolicyAllocationResult> allocationResults = allocateAbsorptionToPolicies(policyInputs, groupResult, assumptions);
         writeBackToContexts(contexts, allocationResults, groupStatus);

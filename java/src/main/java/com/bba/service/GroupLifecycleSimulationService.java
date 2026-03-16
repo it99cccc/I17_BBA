@@ -5,6 +5,7 @@ import com.bba.entity.RateCurve;
 import com.bba.model.Assumptions;
 import com.bba.model.CalculationContext;
 import com.bba.model.group.*;
+import com.bba.model.group.IPolicyGroupCalculationInput;
 import com.bba.model.pv.PVSourceDataCollection;
 import com.bba.model.pv.PVSourceData;
 import com.bba.service.logic.*;
@@ -129,6 +130,14 @@ public class GroupLifecycleSimulationService {
             ps.setBopLcCf(DECIMAL_ZERO);
             ps.setBopLcRa(DECIMAL_ZERO);
 
+            // [优化] 预加载 PV 数据，避免后续重复 IO
+            try {
+                PVSourceDataCollection pvData = pvSourceLoaderService.generatePvSourceData(ps.getPolicyNo(), ps.getCertiNo(), runDate);
+                ps.setPvSourceData(pvData);
+            } catch (Exception e) {
+                logger.logText("  - ⚠️ 加载 PV 数据失败: " + e.getMessage());
+            }
+
             groupCohortState.getGroupPolicies().add(ps);
         }
 
@@ -170,8 +179,12 @@ public class GroupLifecycleSimulationService {
                 // 设置实际签单保费，用于加权锁定利率更新
                 context.setActualPremium(ps.getWrittenPremium() != null ? ps.getWrittenPremium() : BigDecimal.ZERO);
 
-                // 加载 PV 数据
-                PVSourceDataCollection pvData = pvSourceLoaderService.generatePvSourceData(ps.getPolicyNo(),ps.getCertiNo(), runDate);
+                // 加载 PV 数据 (优先使用预加载)
+                PVSourceDataCollection pvData = ps.getPvSourceData();
+                if (pvData == null) {
+                    pvData = pvSourceLoaderService.generatePvSourceData(ps.getPolicyNo(), ps.getCertiNo(), runDate);
+                    ps.setPvSourceData(pvData);
+                }
                 context.setPvSourceData(pvData);
 
                 // 加载签单时点利率曲线
@@ -331,8 +344,11 @@ public class GroupLifecycleSimulationService {
                 context.setBopIacf(ps.getBopIacf() != null ? ps.getBopIacf() : BigDecimal.ZERO);
 
                 // 加载该评估日期的 PV 数据
-                //TODO 重复调用，需要优化
-                PVSourceDataCollection pvDataCollection = pvSourceLoaderService.generatePvSourceData(ps.getPolicyNo(), ps.getCertiNo(), runDate);
+                PVSourceDataCollection pvDataCollection = ps.getPvSourceData();
+                if (pvDataCollection == null) {
+                    pvDataCollection = pvSourceLoaderService.generatePvSourceData(ps.getPolicyNo(), ps.getCertiNo(), runDate);
+                    ps.setPvSourceData(pvDataCollection);
+                }
                 context.setPvSourceData(pvDataCollection);
 
                 // 获取当期 PV 数据
@@ -407,7 +423,10 @@ public class GroupLifecycleSimulationService {
                 }
 
                 // --- 核心计算逻辑 ---
-                String pUnitId =  ps.getPolicyNo() + ps.getCertiNo();
+                String pUnitId = ps.getUnitId();
+                if (pUnitId == null) {
+                    pUnitId = ps.getPolicyNo() + ps.getCertiNo();
+                }
                 context.setUnitId(pUnitId);
                 logger.logText("#### [年度初始计算] 处理保单: " + pUnitId);
 
@@ -452,7 +471,7 @@ public class GroupLifecycleSimulationService {
             //同一个合同组内的保单险类是相同的，所以可以直接取第一个保单的假设
             Assumptions currentAssumptions = policyContexts.get(0).getAssumptions();
 
-            List<PolicyContextInput> inputs = groupCsmLcMeasurementService.collectPolicyData(policyContexts);
+            List<IPolicyGroupCalculationInput> inputs = new ArrayList<>(policyContexts);
             GroupStatusResult groupStatus = groupCsmLcMeasurementService.calculateGroupStatus(inputs, logger);
 
             groupCsmLcMeasurementService.allocateGroupCsmLcToPolicies(inputs, groupStatus, policyContexts, logger);

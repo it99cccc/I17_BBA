@@ -2,6 +2,7 @@ package com.bba.model;
 
 import com.bba.entity.PolicyContract;
 import com.bba.entity.RateCurve;
+import com.bba.model.group.IPolicyGroupCalculationInput;
 import com.bba.model.pv.PVSourceDataCollection;
 import lombok.Data;
 import java.math.BigDecimal;
@@ -9,7 +10,7 @@ import java.time.LocalDate;
 import java.util.List;
 
 @Data
-public class CalculationContext {
+public class CalculationContext implements IPolicyGroupCalculationInput {
     
     // --- Data ---
     private PolicyContract policyData;
@@ -234,4 +235,57 @@ public class CalculationContext {
     private BigDecimal bopIacfInterest;
     private BigDecimal nbIacfInterest;
     private BigDecimal iacfExpAdj;
+
+    // --- IPolicyGroupCalculationInput Implementation ---
+
+    @Override
+    public boolean isIf() {
+        BigDecimal csm = getBopCsm() != null ? getBopCsm() : BigDecimal.ZERO;
+        BigDecimal lc = getBopLc() != null ? getBopLc() : BigDecimal.ZERO;
+        return csm.compareTo(BigDecimal.ZERO) != 0 || lc.compareTo(BigDecimal.ZERO) != 0;
+    }
+
+    @Override
+    public BigDecimal getCsmAfterInterest() {
+        BigDecimal interest = isIf() ? 
+            (getIfInterestCsm() != null ? getIfInterestCsm() : BigDecimal.ZERO) : 
+            (getNbInterestCsm() != null ? getNbInterestCsm() : BigDecimal.ZERO);
+        
+        BigDecimal initial = isIf() ? 
+            (getBopCsm() != null ? getBopCsm() : BigDecimal.ZERO) : 
+            (getNbInitialCsm() != null ? getNbInitialCsm() : BigDecimal.ZERO);
+            
+        return initial.add(interest);
+    }
+
+    @Override
+    public BigDecimal getLcAfterIfie() {
+        BigDecimal ifie = isIf() ? 
+            (getIfLcIfieTotal() != null ? getIfLcIfieTotal() : BigDecimal.ZERO) : 
+            (getNbLcIfieTotal() != null ? getNbLcIfieTotal() : BigDecimal.ZERO);
+            
+        BigDecimal initial = isIf() ? 
+            (getBopLc() != null ? getBopLc() : BigDecimal.ZERO) : 
+            (getNbInitialLc() != null ? getNbInitialLc() : BigDecimal.ZERO);
+            
+        return initial.add(ifie);
+    }
+
+    @Override
+    public BigDecimal getDeltaTotal() {
+        // Changes in fulfillment cash flows that adjust CSM (ExpAdjCsmImpact)
+        return getExpAdjCsmImpact() != null ? getExpAdjCsmImpact() : BigDecimal.ZERO;
+    }
+
+    @Override
+    public BigDecimal getDeltaCf() {
+        return getDeltaCfTotal() != null ? getDeltaCfTotal() : BigDecimal.ZERO;
+    }
+
+    @Override
+    public BigDecimal getDeltaRa() {
+        // Delta Total = Delta CF + Delta RA
+        // So Delta RA = Delta Total - Delta CF
+        return getDeltaTotal().subtract(getDeltaCf());
+    }
 }

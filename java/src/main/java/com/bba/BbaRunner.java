@@ -57,7 +57,7 @@ public class BbaRunner implements CommandLineRunner {
 
         // Check if group simulation is requested
         // if (effectiveArgs.length > 0 && effectiveArgs[0].equals("group")) {
-            String groupId = effectiveArgs.length > 1 ? effectiveArgs[1] : "QHPLIA2023ABBA305";
+            String groupId = effectiveArgs.length > 1 ? effectiveArgs[1] : "QHPLIA2023ABBA304";
             String runDateVal = "202412"; // Renamed to avoid conflict with runDate below if needed, though scoping handles it
             String valMethod = "7"; // Default to BBA or 7 depending on logic, Python uses VAL_METHOD from config which is usually 7 or BBA
             // Let's use "7" as in the commented out code, or check what Python uses.

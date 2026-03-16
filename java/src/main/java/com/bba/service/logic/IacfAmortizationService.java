@@ -36,22 +36,16 @@ public class IacfAmortizationService {
         // ==========================================================================================
 
         BigDecimal initExpectedCurIacf = BigDecimal.ZERO;
-        BigDecimal endExpectedFutIacf = BigDecimal.ZERO;
+        String eopMonthStr = context.getValMonthStr();
+        PVSourceData pvData = context.getPvSourceData().getData(eopMonthStr);
 
         if (context.getPvSourceData() != null) {
-            String eopMonthStr = context.getValMonthStr();
-            PVSourceData pvData = context.getPvSourceData().getData(eopMonthStr);
 
             if (pvData != null) {
                 // 1.1 初始确认预期当年 IACF
                 // 公式：-[新增合同-初始确认-预期当期-预期IACF-期末现值(Wlk)]
                 BigDecimal rawInitExpectedCurIacf = pvData.getField("Pvfl_Nb_Ini_Cca_Rep_Wlk_Acq_Amt", BigDecimal.ZERO);
                 initExpectedCurIacf = rawInitExpectedCurIacf.negate();
-
-                // 1.3 期末预期未来 IACF 现值
-                // 公式：-[新增合同-初始确认-预期未来-IACF-期末现值(Wlk)]
-                BigDecimal rawEndExpectedFutIacf = pvData.getField("Pvfl_Nb_Ini_Cfa_Rep_Wlk_Acq_Amt", BigDecimal.ZERO);
-                endExpectedFutIacf = rawEndExpectedFutIacf.negate();
             }
         }
 
@@ -63,30 +57,12 @@ public class IacfAmortizationService {
                 initExpectedCurIacf
         );
 
-        // 1.2 当年 IACF 计息
-        BigDecimal iacfInterestCurrent = BigDecimal.ZERO;
-        logger.logItem(
-                "当年IACF计息",
-                "[Step 1.2] 当年新增IACF产生的利息",
-                "0 (不考虑时间价值)",
-                new HashMap<String, Object>(),
-                iacfInterestCurrent
-        );
-
-        logger.logItem(
-                "期末预期未来IACF现值",
-                "[Step 1.3] 期末时预期的未来IACF流出（期末现值）",
-                "-[新增合同-初始确认-预期未来-IACF-期末现值(Wlk)]",
-                new HashMap<String, Object>(),
-                endExpectedFutIacf
-        );
 
         // 1.4 当年新增总 IACF 期末现值
-        BigDecimal totalNbIacfEndPv = initExpectedCurIacf.add(iacfInterestCurrent).add(endExpectedFutIacf);
+        BigDecimal totalNbIacfEndPv = initExpectedCurIacf;
         Map<String, Object> meta14 = new HashMap<>();
         meta14.put("初始确认预期当年IACF", initExpectedCurIacf);
-        meta14.put("当年IACF计息", iacfInterestCurrent);
-        meta14.put("期末预期未来IACF现值", endExpectedFutIacf);
+
         logger.logItem(
                 "当年新增总IACF期末现值",
                 "[Step 1.4] 当年新增合同相关的IACF总额（期末现值）",
@@ -148,18 +124,8 @@ public class IacfAmortizationService {
                 bopIacf
         );
 
-        // 2.3 年初待摊 IACF 计息
-        BigDecimal iacfInterestBop = BigDecimal.ZERO;
-        logger.logItem(
-                "年初待摊IACF计息",
-                "[Step 2.3] 期初余额产生的利息",
-                "0 (不考虑时间价值)",
-                new HashMap<>(),
-                iacfInterestBop
-        );
-
         // 2.4 当年新增 IACF (使用名义值)
-        BigDecimal expectedIacfNominal = context.getExpectedIacfNominal() != null ? context.getExpectedIacfNominal() : BigDecimal.ZERO;
+        BigDecimal expectedIacfNominal = pvData.getField("Pvfl_Nb_Ini_Cca_Rep_Wlk_Acq_Amt", BigDecimal.ZERO);
         context.setNbIacfAddition(expectedIacfNominal);
         Map<String, Object> metaNb = new HashMap<>();
         metaNb.put("Expected IACF", expectedIacfNominal);
@@ -171,54 +137,17 @@ public class IacfAmortizationService {
                 context.getNbIacfAddition()
         );
 
-        // 2.5 当年新增 IACF 计息
-        context.setIacfInterestNb(BigDecimal.ZERO);
-        logger.logItem(
-                "当年新增IACF计息",
-                "[Step 2.5] 新增IACF产生的利息",
-                "0 (不考虑时间价值)",
-                new HashMap<>(),
-                context.getIacfInterestNb()
-        );
-
-        // 2.6 IACF 变化
-        BigDecimal iacfChange = context.getIacfVar() != null ? context.getIacfVar() : BigDecimal.ZERO;
-        context.setIacfChange(iacfChange);
-        Map<String, Object> metaChange = new HashMap<>();
-        metaChange.put("Actual", context.getActualIacfIncurred());
-        metaChange.put("Expected", context.getExpectedIacfNominal());
-        logger.logItem(
-                "IACF变化",
-                "[Step 2.6] 实际与预期获取费用的差异",
-                "Actual IACF - Expected IACF",
-                metaChange,
-                iacfChange
-        );
-
-        // 2.7 IACF 经验调整
-        BigDecimal iacfExpAdj = BigDecimal.ZERO;
-        logger.logItem(
-                "IACF经验调整",
-                "[Step 2.7] 其他经验调整项",
-                "Manual Input",
-                new HashMap<>(),
-                iacfExpAdj
-        );
-
         // 2.8 摊销的 IACF
-        BigDecimal iacfBalanceBase = bopIacf.add(iacfInterestBop)
-                .add(context.getNbIacfAddition())
-                .add(context.getIacfInterestNb())
-                .add(iacfChange);
+        BigDecimal iacfBalanceBase = bopIacf
+                .add(initExpectedCurIacf);
 
         // [User Request] 摊销的IACF应该是个负数
-        BigDecimal iacfAmortAmount = iacfBalanceBase.multiply(iacfAmortRatio).add(iacfExpAdj).negate();
+        BigDecimal iacfAmortAmount = iacfBalanceBase.multiply(iacfAmortRatio).negate();
         context.setIacfAmortAmount(iacfAmortAmount);
 
         Map<String, Object> metaAmort = new HashMap<>();
         metaAmort.put("Base Sum", iacfBalanceBase);
         metaAmort.put("Ratio", iacfAmortRatio);
-        metaAmort.put("ExpAdj", iacfExpAdj);
         logger.logItem(
                 "摊销的IACF",
                 "[Step 2.8] 本期摊销计入费用的金额（负数表示减少资产）",
@@ -229,14 +158,13 @@ public class IacfAmortizationService {
 
         // 2.9 期末待摊 IACF 余额
         // Balance = Base + ExpAdj + Amort (Amort is negative)
-        BigDecimal eopIacfBalance = iacfBalanceBase.add(iacfExpAdj).add(iacfAmortAmount);
+        BigDecimal eopIacfBalance = iacfBalanceBase.add(iacfAmortAmount);
 
 
         context.setEopIacfBalance(eopIacfBalance);
 
         Map<String, Object> metaEop = new HashMap<>();
         metaEop.put("Base", iacfBalanceBase);
-        metaEop.put("ExpAdj", iacfExpAdj);
         metaEop.put("Amortization", iacfAmortAmount);
         logger.logItem(
                 "期末待摊IACF余额",

@@ -1,6 +1,7 @@
 package com.bba.model.group;
 
 import com.bba.model.PolicyState;
+import com.bba.model.pv.PVSourceDataCollection;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.ToString;
@@ -15,6 +16,7 @@ public class GroupPolicyState extends PolicyState {
     private String classCode;
     private java.math.BigDecimal iacfAmount;
     private java.math.BigDecimal initialCsmForWeight;
+    private PVSourceDataCollection pvSourceData;
 
     /**
      * 初始预期现金流_含亏损

@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BBA 模型对象关系与数据流梳理</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f4f4f9;
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+        }
+        .container {
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .diagram {
+            text-align: center;
+            margin: 20px 0;
+            overflow-x: auto;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        th, td {
+            padding: 12px;
+            border: 1px solid #ddd;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        .code-ref {
+            font-family: 'Consolas', 'Monaco', monospace;
+            background-color: #eee;
+            padding: 2px 4px;
+            border-radius: 4px;
+            color: #d63384;
+        }
+        .arrow {
+            color: #e74c3c;
+            font-weight: bold;
+        }
+        .note {
+            background-color: #fff3cd;
+            border-left: 5px solid #ffc107;
+            padding: 10px;
+            margin: 10px 0;
+        }
+        .class-box {
+            border: 1px solid #3498db;
+            border-radius: 5px;
+            padding: 10px;
+            margin: 10px 0;
+            background-color: #e8f4f8;
+        }
+        .class-title {
+            font-weight: bold;
+            color: #2980b9;
+            border-bottom: 1px solid #3498db;
+            padding-bottom: 5px;
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>BBA 模型对象关系与数据流梳理</h1>
+    
+    <div class="container">
+        <h2>1. 核心对象概览</h2>
+        <p>在 <code>GroupLifecycleSimulationService</code> 中，主要涉及以下几个关键对象，它们分别承担不同的职责：</p>
+        
+        <div class="class-box">
+            <div class="class-title">PolicyContract (Entity)</div>
+            <div><strong>职责：</strong> 数据库实体类，映射 <code>zh.t_pp_jl_contract</code> 表。</div>
+            <div><strong>生命周期：</strong> 仅在初始化阶段使用，用于加载原始保单数据。</div>
+        </div>
+
+        <div class="class-box">
+            <div class="class-title">GroupCohortState (Model)</div>
+            <div><strong>职责：</strong> 维护整个合同组（Group）的长期状态。</div>
+            <div><strong>包含：</strong> <code>List&lt;GroupPolicyState&gt;</code>，以及组级别的期初/期末余额（BOP/EOP CSM, LC等）。</div>
+            <div><strong>生命周期：</strong> 贯穿整个仿真过程，跨年度持久存在。</div>
+        </div>
+
+        <div class="class-box">
+            <div class="class-title">GroupPolicyState (Model)</div>
+            <div><strong>职责：</strong> 维护单张保单在组内的长期状态。继承自 <code>PolicyState</code>。</div>
+            <div><strong>包含：</strong> 保单基本信息、期初余额 (BOP)、期末余额等。</div>
+            <div><strong>生命周期：</strong> 贯穿整个仿真过程，每年更新。</div>
+        </div>
+
+        <div class="class-box">
+            <div class="class-title">CalculationContext (Context)</div>
+            <div><strong>职责：</strong> "上帝对象"，承载单次计算（单张保单、单年度）所需的所有上下文信息、中间变量和结果。</div>
+            <div><strong>包含：</strong> 引用 <code>PolicyContract</code> (或其数据)、PV数据、利率曲线、精算假设、计算过程中的各种中间值（如利息、变动额、分摊结果）。</div>
+            <div><strong>生命周期：</strong> 每年、每张保单创建一个新的实例。</div>
+        </div>
+
+        <div class="class-box">
+            <div class="class-title">PolicyContextInput (DTO)</div>
+            <div><strong>职责：</strong> 数据传输对象。仅用于将 <code>CalculationContext</code> 中的关键数据提取出来，传递给 <code>GroupCsmLcMeasurementService</code> 进行组级别聚合计算。</div>
+            <div><strong>生命周期：</strong> 瞬态，仅在组级别计算前创建，计算后丢弃。</div>
+        </div>
+
+        <div class="class-box">
+            <div class="class-title">GroupStatusResult (DTO)</div>
+            <div><strong>职责：</strong> 封装组级别状态判定的结果。</div>
+            <div><strong>包含：</strong> 组是否盈利 (<code>isProfitable</code>)、Net Trial 值、聚合后的 CSM/LC 余额。</div>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>2. 字段赋值流程与数据流转</h2>
+        <p>数据在各对象间流转的典型路径如下：</p>
+        
+        <div class="diagram">
+            <strong>Database</strong> <span class="arrow">→</span> 
+            <strong>PolicyContract</strong> <span class="arrow">→</span> 
+            <strong>GroupPolicyState</strong> <span class="arrow">→</span> 
+            <strong>CalculationContext</strong> <span class="arrow">→</span> 
+            <strong>PolicyContextInput</strong> <span class="arrow">→</span> 
+            <strong>GroupStatusResult</strong> <span class="arrow">→</span> 
+            <strong>CalculationContext</strong> <span class="arrow">→</span> 
+            <strong>GroupPolicyState</strong>
+        </div>
+
+        <h3>详细步骤解析</h3>
+
+        <h4>步骤 1: 初始化 (Initialization)</h4>
+        <p><strong>源：</strong> <code>PolicyContract</code> (DB)<br>
+        <strong>目标：</strong> <code>GroupPolicyState</code></p>
+        <p>在 <code>initializeGroup</code> 方法中，将数据库实体转换为内存中的状态对象。</p>
+        <ul>
+            <li><code>PolicyContract.policyNo</code> <span class="arrow">→</span> <code>GroupPolicyState.policyNo</code></li>
+            <li><code>PolicyContract.startDate</code> <span class="arrow">→</span> <code>GroupPolicyState.startDate</code></li>
+            <li>... 其他基本信息</li>
+            <li>初始化 BOP (Beginning of Period) 值为 0。</li>
+        </ul>
+
+        <h4>步骤 2: 年度计算准备 (Per Year Loop)</h4>
+        <p><strong>源：</strong> <code>GroupPolicyState</code><br>
+        <strong>目标：</strong> <code>CalculationContext</code></p>
+        <p>在 <code>simulateLifecycle</code> 循环内部，为每张保单创建计算上下文。</p>
+        <ul>
+            <li><code>GroupPolicyState.policyNo</code> <span class="arrow">→</span> <code>CalculationContext.policyNo</code></li>
+            <li><code>GroupPolicyState.bopCsm</code> <span class="arrow">→</span> <code>CalculationContext.bopCsm</code> (期初余额传递)</li>
+            <li><code>GroupPolicyState.bopLc</code> <span class="arrow">→</span> <code>CalculationContext.bopLc</code></li>
+            <li>加载外部数据：PV数据 (<code>pvSourceData</code>)、利率 (<code>ratesDf</code>)、假设 (<code>assumptions</code>) 注入到 Context。</li>
+        </ul>
+
+        <h4>步骤 3: 组级别汇总准备</h4>
+        <p><strong>源：</strong> <code>CalculationContext</code><br>
+        <strong>目标：</strong> <code>PolicyContextInput</code></p>
+        <p>在单单计算部分完成后，<code>GroupCsmLcMeasurementService.collectPolicyData</code> 提取数据。</p>
+        <ul>
+            <li><code>CalculationContext.unitId</code> <span class="arrow">→</span> <code>PolicyContextInput.unitId</code></li>
+            <li><code>CalculationContext.bopCsm</code> <span class="arrow">→</span> <code>PolicyContextInput.bopCsm</code></li>
+            <li><code>CalculationContext.nbInitialCsm</code> <span class="arrow">→</span> <code>PolicyContextInput.nbInitialCsm</code></li>
+            <li><code>CalculationContext.ifInterestCsm</code> <span class="arrow">→</span> <code>PolicyContextInput.ifInterestCsm</code> (中间计算结果)</li>
+            <li>... 其他用于判断盈利/亏损的字段</li>
+        </ul>
+
+        <h4>步骤 4: 组状态回写与分摊</h4>
+        <p><strong>源：</strong> <code>GroupStatusResult</code> / <code>PolicyAllocationResult</code><br>
+        <strong>目标：</strong> <code>CalculationContext</code></p>
+        <p><code>GroupCsmLcMeasurementService.writeBackToContexts</code> 将组级别计算结果（如吸收额、分摊额）写回 Context。</p>
+        <ul>
+            <li><code>GroupStatusResult.isProfitable</code> <span class="arrow">→</span> <code>CalculationContext.isProfitable</code> (通过逻辑判断设置)</li>
+            <li><code>PolicyAllocationResult.csmAbsorbed</code> <span class="arrow">→</span> <code>CalculationContext.csmAbsorbed</code></li>
+            <li><code>PolicyAllocationResult.allocatedGroupLc</code> <span class="arrow">→</span> <code>CalculationContext.allocatedGroupLc</code></li>
+        </ul>
+
+        <h4>步骤 5: 年度结转 (End of Year)</h4>
+        <p><strong>源：</strong> <code>CalculationContext</code><br>
+        <strong>目标：</strong> <code>GroupPolicyState</code></p>
+        <p>年度计算结束后，将期末值 (EOP) 更新回状态对象，作为下一年的期初值。</p>
+        <ul>
+            <li><code>CalculationContext.endCsmFinal</code> <span class="arrow">→</span> <code>GroupPolicyState.bopCsm</code></li>
+            <li><code>CalculationContext.endLcFinal</code> <span class="arrow">→</span> <code>GroupPolicyState.bopLc</code></li>
+            <li><code>CalculationContext.eopIacfBalance</code> <span class="arrow">→</span> <code>GroupPolicyState.bopIacf</code></li>
+        </ul>
+    </div>
+
+    <div class="container">
+        <h2>3. 易混淆点解析</h2>
+        
+        <div class="note">
+            <strong>1. CalculationContext vs PolicyContextInput</strong>
+            <p><code>CalculationContext</code> 包含所有信息，包括大对象（如 PV 数据 List）。<code>PolicyContextInput</code> 是一个轻量级 DTO，只包含数字字段（BigDecimal），专门用于组级别的高性能聚合计算，避免传递整个 Context。</p>
+        </div>
+
+        <div class="note">
+            <strong>2. UnitId 的构建</strong>
+            <p>代码中使用 <code>policyNo + certiNo</code> 作为 <code>unitId</code>。必须确保在所有阶段（初始化、Context创建、DTO转换）使用完全一致的构建规则，否则在回写（WriteBack）阶段会匹配失败。</p>
+        </div>
+
+        <div class="note">
+            <strong>3. 两次 CSM/LC 计量调用</strong>
+            <p>代码中存在 "Two-Pass" 计算逻辑：</p>
+            <ol>
+                <li>第一次调用 <code>csmLcMeasurementService</code>：基于单单假设计算初步结果，用于汇总判断组状态。</li>
+                <li>第二次调用 <code>csmLcMeasurementService</code>：在得知组状态（盈利/亏损）和分摊吸收额后，重新计算最终的 CSM/LC。</li>
+            </ol>
+            <p><strong>混淆点：</strong> 中间变量会被覆盖或更新，需注意读取的时机。</p>
+        </div>
+    </div>
+
+</body>
+</html>
