@@ -248,34 +248,39 @@ public class GroupCsmLcMeasurementService {
         BigDecimal nbInitialCsmTotal = policyInputs.stream().map(IPolicyGroupCalculationInput::getNbInitialCsm).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal csmInterestTotal = policyInputs.stream().map(p -> p.getIfInterestCsm().add(p.getNbInterestCsm())).reduce(BigDecimal.ZERO, BigDecimal::add);
 
+        // [FIX] 总变化就等于所有保单的履约现金流变化之和
         BigDecimal deltaCsmLcTotal = groupDeltaTotal;
 
-        // [FIX] 彻底重构吸收逻辑，移除所有基于中间变量的脆弱布尔判定
-        BigDecimal totalLcToReverse = bopLcTotal.add(nbInitialLcTotal).add(lcIfieTotal).add(allocatedLcTotal);
-        boolean hasOpeningLc = totalLcToReverse.compareTo(BigDecimal.ZERO) < 0;
-        boolean isProfitableNow = netTrial.compareTo(BigDecimal.ZERO) >= 0;
+        // 存储每个保单的组别合计，用于后续判断抹平和分摊因子
+        Map<String, BigDecimal> policyGroupTotals = new HashMap<>();
+        BigDecimal groupTotalAfterDelta = BigDecimal.ZERO;
 
-        BigDecimal groupLcAbsorbedTotal = DECIMAL_ZERO;
-        BigDecimal groupCsmAbsorbedTotal;
-
-        if (isProfitableNow) {
-            // [Case 1: 盈利组 (一直盈利 或 扭亏为盈)]
-            // 目标：LC 必须清零
-            if (hasOpeningLc) {
-                groupCsmAbsorbedTotal = netTrial.add(deltaCsmLcTotal).subtract(bopCsmTotal.add(nbInitialCsmTotal).add(csmInterestTotal));
-                groupLcAbsorbedTotal = deltaCsmLcTotal.subtract(groupCsmAbsorbedTotal);
-            } else {
-                // 一直盈利 (没有期初 LC)
-                groupCsmAbsorbedTotal = deltaCsmLcTotal;
-                groupLcAbsorbedTotal = DECIMAL_ZERO;
-            }
-        } else {
-            // [Case 2: 亏损组]
-            // CSM 必须清零 (如果有)
-            // CSM_Absorbed = -(CSM_Start)
-            groupCsmAbsorbedTotal = bopCsmTotal.add(nbInitialCsmTotal).add(csmInterestTotal).negate();
-            groupLcAbsorbedTotal = deltaCsmLcTotal.subtract(groupCsmAbsorbedTotal);
+        for (IPolicyGroupCalculationInput p : policyInputs) {
+            BigDecimal policyGroupTotal = p.getBopCsm().add(p.getBopLc())
+                    .add(p.getNbInitialCsm()).add(p.getNbInitialLc())
+                    .add(p.getIfInterestCsm()).add(p.getNbInterestCsm())
+                    .add(p.getIfLcIfieTotal()).add(p.getNbLcIfieTotal())
+                    .add(p.getAllocatedLcTotal())
+                    .add(p.getDeltaTotal());
+            policyGroupTotals.put(p.getUnitId(), policyGroupTotal);
+            groupTotalAfterDelta = groupTotalAfterDelta.add(policyGroupTotal);
         }
+
+        // [FIX] 吸收后的盈利状态必须由包含 deltaTotal 的最终组别合计决定！
+        boolean isProfitableNow = groupTotalAfterDelta.compareTo(BigDecimal.ZERO) >= 0;
+
+        // [FIX] 更新真实的吸收后组级别 CSM 和 LC
+        BigDecimal finalCohortCsm = isProfitableNow ? groupTotalAfterDelta : BigDecimal.ZERO;
+        BigDecimal finalCohortLc = isProfitableNow ? BigDecimal.ZERO : groupTotalAfterDelta;
+
+        // [FIX] 使用倒推法完美计算组级吸收变化总额
+        // 组级 CSM 吸收 = 目标期末 CSM - 吸收前 CSM
+        BigDecimal groupCsmBeforeDelta = bopCsmTotal.add(nbInitialCsmTotal).add(csmInterestTotal);
+        BigDecimal groupCsmAbsorbedTotal = finalCohortCsm.subtract(groupCsmBeforeDelta);
+
+        // 组级 LC 吸收 = 目标期末 LC - 吸收前 LC
+        BigDecimal groupLcBeforeDelta = bopLcTotal.add(nbInitialLcTotal).add(lcIfieTotal).add(allocatedLcTotal);
+        BigDecimal groupLcAbsorbedTotal = finalCohortLc.subtract(groupLcBeforeDelta);
 
         if (logger != null) {
             logger.logText(String.format("  - 被CSM/LC吸收的变化合计: %,.2f", deltaCsmLcTotal));
@@ -299,8 +304,8 @@ public class GroupCsmLcMeasurementService {
         BigDecimal groupCsmAbsorbedRa = groupCsmAbsorbedTotal.subtract(groupCsmAbsorbedCf);
 
         return GroupAbsorptionResult.builder()
-                .cohortCsm(cohortCsm)
-                .cohortLc(cohortLc)
+                .cohortCsm(finalCohortCsm) // [FIX] 使用更新后的组级别 CSM
+                .cohortLc(finalCohortLc)   // [FIX] 使用更新后的组级别 LC
                 .netTrial(netTrial)
                 .groupCsmAbsorbedTotal(groupCsmAbsorbedTotal)
                 .groupCsmAbsorbedCf(groupCsmAbsorbedCf)
@@ -320,41 +325,103 @@ public class GroupCsmLcMeasurementService {
     public List<PolicyAllocationResult> allocateAbsorptionToPolicies(List<IPolicyGroupCalculationInput> policyInputs, GroupAbsorptionResult groupResult, Assumptions assumptions) {
         List<PolicyAllocationResult> allocationResults = new ArrayList<>();
 
-        BigDecimal totalCsmAfterInterest = policyInputs.stream()
-                .map(IPolicyGroupCalculationInput::getCsmAfterInterest)
-                .filter(csm -> csm.compareTo(DECIMAL_ZERO) > 0)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        // [FIX] 盈利状态必须由包含 deltaTotal 的最终组别合计决定！
+        BigDecimal groupTotalAfterDelta = BigDecimal.ZERO;
+        for (IPolicyGroupCalculationInput p : policyInputs) {
+             groupTotalAfterDelta = groupTotalAfterDelta.add(p.getBopCsm().add(p.getBopLc())
+                    .add(p.getNbInitialCsm()).add(p.getNbInitialLc())
+                    .add(p.getIfInterestCsm()).add(p.getNbInterestCsm())
+                    .add(p.getIfLcIfieTotal()).add(p.getNbLcIfieTotal())
+                    .add(p.getAllocatedLcTotal())
+                    .add(p.getDeltaTotal()));
+        }
+        boolean isProfitableNow = groupTotalAfterDelta.compareTo(BigDecimal.ZERO) >= 0;
 
-        BigDecimal totalLcAfterIfieAbs = policyInputs.stream()
-                .filter(p -> p.getLcAfterIfie().compareTo(DECIMAL_ZERO) < 0)
-                .map(p -> p.getLcAfterIfie().abs())
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        // 重新计算各单的“抹平后余额”作为分摊因子
+        Map<String, BigDecimal> smoothedBalances = new HashMap<>();
+        BigDecimal totalSmoothedBalance = BigDecimal.ZERO;
 
         for (IPolicyGroupCalculationInput p : policyInputs) {
-            BigDecimal csmAbsorbed = DECIMAL_ZERO;
-            BigDecimal csmAbsorbedCf = DECIMAL_ZERO;
-            BigDecimal csmAbsorbedRa = DECIMAL_ZERO;
-            BigDecimal csmAllocationWeight = DECIMAL_ZERO;
+            BigDecimal policyGroupTotal = p.getBopCsm().add(p.getBopLc())
+                    .add(p.getNbInitialCsm()).add(p.getNbInitialLc())
+                    .add(p.getIfInterestCsm()).add(p.getNbInterestCsm())
+                    .add(p.getIfLcIfieTotal()).add(p.getNbLcIfieTotal())
+                    .add(p.getAllocatedLcTotal())
+                    .add(p.getDeltaTotal());
 
-            if (p.getCsmAfterInterest().compareTo(DECIMAL_ZERO) > 0 && totalCsmAfterInterest.compareTo(DECIMAL_ZERO) > 0) {
-                BigDecimal csmWeight = p.getCsmAfterInterest().divide(totalCsmAfterInterest, MathContext.DECIMAL128);
-                csmAbsorbed = groupResult.getGroupCsmAbsorbedTotal().multiply(csmWeight);
-                csmAbsorbedCf = groupResult.getGroupCsmAbsorbedCf().multiply(csmWeight);
-                csmAbsorbedRa = groupResult.getGroupCsmAbsorbedRa().multiply(csmWeight);
-                csmAllocationWeight = csmWeight.multiply(DECIMAL_100);
+            BigDecimal smoothedBalance = policyGroupTotal;
+
+            if (isProfitableNow) {
+                // 盈利组：抹平所有亏损倾向的保单（非批减单<0，或批减单>0）
+                // 简单处理：盈利组中，所有与盈利方向相反（即 < 0）的余额抹平
+                if (policyGroupTotal.compareTo(BigDecimal.ZERO) < 0) {
+                    smoothedBalance = BigDecimal.ZERO;
+                }
+            } else {
+                // 亏损组：抹平所有与亏损方向相反（即 > 0）的余额，以及所有批减单
+                if (policyGroupTotal.compareTo(BigDecimal.ZERO) > 0 || p.isReversalPolicy()) {
+                    smoothedBalance = BigDecimal.ZERO;
+                }
+            }
+            smoothedBalances.put(p.getUnitId(), smoothedBalance);
+            totalSmoothedBalance = totalSmoothedBalance.add(smoothedBalance);
+        }
+
+        BigDecimal denominator = totalSmoothedBalance;
+
+        for (IPolicyGroupCalculationInput p : policyInputs) {
+            BigDecimal smoothedBalance = smoothedBalances.get(p.getUnitId());
+            
+            // 计算保单的目标期末余额
+            BigDecimal targetFinalCsm = BigDecimal.ZERO;
+            BigDecimal targetFinalLc = BigDecimal.ZERO;
+            BigDecimal csmAllocationWeight = BigDecimal.ZERO;
+            BigDecimal lcAllocationWeight = BigDecimal.ZERO;
+
+            if (denominator.compareTo(BigDecimal.ZERO) != 0) {
+                BigDecimal weight = smoothedBalance.divide(denominator, MathContext.DECIMAL128);
+                if (isProfitableNow) {
+                    targetFinalCsm = groupTotalAfterDelta.multiply(weight);
+                    csmAllocationWeight = weight.multiply(DECIMAL_100);
+                } else {
+                    targetFinalLc = groupTotalAfterDelta.multiply(weight);
+                    lcAllocationWeight = weight.multiply(DECIMAL_100);
+                }
+            } else if (policyInputs.size() == 1) {
+                // 单保单防呆：如果分母为0但只有一张单，全部分给它
+                if (isProfitableNow) {
+                    targetFinalCsm = groupTotalAfterDelta;
+                    csmAllocationWeight = DECIMAL_100;
+                } else {
+                    targetFinalLc = groupTotalAfterDelta;
+                    lcAllocationWeight = DECIMAL_100;
+                }
             }
 
-            BigDecimal lcAbsorbedTotal = DECIMAL_ZERO;
-            BigDecimal lcAbsorbedCf = DECIMAL_ZERO;
-            BigDecimal lcAbsorbedRa = DECIMAL_ZERO;
-            BigDecimal lcAllocationWeight = DECIMAL_ZERO;
+            // 计算吸收前的余额
+            BigDecimal csmBeforeDelta = p.getBopCsm().add(p.getNbInitialCsm()).add(p.getIfInterestCsm()).add(p.getNbInterestCsm());
+            BigDecimal lcBeforeDelta = p.getBopLc().add(p.getNbInitialLc()).add(p.getIfLcIfieTotal()).add(p.getNbLcIfieTotal()).add(p.getAllocatedLcTotal());
 
-            boolean isLcPolicy = p.getLcAfterIfie().compareTo(DECIMAL_ZERO) < 0;
+            // [核心修复] 使用倒推法完美计算吸收金额：吸收额 = 目标期末 - 吸收前余额
+            BigDecimal csmAbsorbed = targetFinalCsm.subtract(csmBeforeDelta);
+            BigDecimal lcAbsorbedTotal = targetFinalLc.subtract(lcBeforeDelta);
 
-            if (isLcPolicy && totalLcAfterIfieAbs.compareTo(DECIMAL_ZERO) > 0) {
-                BigDecimal lcWeight = p.getLcAfterIfie().abs().divide(totalLcAfterIfieAbs, MathContext.DECIMAL128);
-                lcAbsorbedTotal = groupResult.getGroupLcAbsorbedTotal().multiply(lcWeight);
+            // 拆分 CF 和 RA
+            BigDecimal csmAbsorbedCf = BigDecimal.ZERO;
+            BigDecimal csmAbsorbedRa = BigDecimal.ZERO;
+            if (csmAbsorbed.compareTo(BigDecimal.ZERO) != 0) {
+                 if (assumptions != null && assumptions.getRaRatio() != null && assumptions.getRaRatio().compareTo(new BigDecimal("-1")) != 0) {
+                     BigDecimal cfRatio = DECIMAL_ONE.divide(DECIMAL_ONE.add(assumptions.getRaRatio()), MathContext.DECIMAL128);
+                     csmAbsorbedCf = csmAbsorbed.multiply(cfRatio);
+                     csmAbsorbedRa = csmAbsorbed.subtract(csmAbsorbedCf);
+                 } else {
+                     csmAbsorbedCf = csmAbsorbed;
+                 }
+            }
 
+            BigDecimal lcAbsorbedCf = BigDecimal.ZERO;
+            BigDecimal lcAbsorbedRa = BigDecimal.ZERO;
+            if (lcAbsorbedTotal.compareTo(BigDecimal.ZERO) != 0) {
                 BigDecimal lcBalanceToAdjustBeforeAbsorption = p.getBopLc()
                         .add(p.getNbInitialLc())
                         .add(p.getIfLcIfieTotal().add(p.getNbLcIfieTotal()))
@@ -367,18 +434,14 @@ public class GroupCsmLcMeasurementService {
                             .add(p.getAllocatedLcCf())).negate();
                     lcAbsorbedRa = lcAbsorbedTotal.subtract(lcAbsorbedCf);
                 } else {
-                     if (assumptions == null || assumptions.getRaRatio() == null) {
-                        throw new IllegalArgumentException("保单 LC 拆分缺少精算假设/ra_ratio");
-                    }
-                    BigDecimal raRatio = assumptions.getRaRatio();
-                     if (raRatio.compareTo(new BigDecimal("-1")) == 0) {
-                        throw new IllegalArgumentException("ra_ratio 不能为 -1");
-                    }
-                    BigDecimal cfRatioFromRa = DECIMAL_ONE.divide(DECIMAL_ONE.add(raRatio), MathContext.DECIMAL128);
-                    lcAbsorbedCf = lcAbsorbedTotal.multiply(cfRatioFromRa);
-                    lcAbsorbedRa = lcAbsorbedTotal.subtract(lcAbsorbedCf);
+                     if (assumptions != null && assumptions.getRaRatio() != null && assumptions.getRaRatio().compareTo(new BigDecimal("-1")) != 0) {
+                        BigDecimal cfRatio = DECIMAL_ONE.divide(DECIMAL_ONE.add(assumptions.getRaRatio()), MathContext.DECIMAL128);
+                        lcAbsorbedCf = lcAbsorbedTotal.multiply(cfRatio);
+                        lcAbsorbedRa = lcAbsorbedTotal.subtract(lcAbsorbedCf);
+                     } else {
+                        lcAbsorbedCf = lcAbsorbedTotal;
+                     }
                 }
-                lcAllocationWeight = lcWeight.multiply(DECIMAL_100);
             }
 
             allocationResults.add(PolicyAllocationResult.builder()
@@ -429,6 +492,11 @@ public class GroupCsmLcMeasurementService {
             ctx.setLcAbsorbedTotal(result.getLcAbsorbedTotal());
             ctx.setLcAbsorbedCf(result.getLcAbsorbedCf());
             ctx.setLcAbsorbedRa(result.getLcAbsorbedRa());
+            
+            // [FIX] 被LC吸收的变化，对于单保单计量模块，名称叫 LcChange，对应 allocatedLcExpAdjTotal
+            ctx.setLcChange(result.getLcAbsorbedTotal());
+            ctx.setAllocatedLcExpAdjCf(result.getLcAbsorbedCf());
+            ctx.setAllocatedLcExpAdjRa(result.getLcAbsorbedRa());
 
             // [FIX] 将分摊结果中携带的组级 CSM/LC 净额写回上下文
             ctx.setAllocatedGroupCsm(result.getCohortCsm());
@@ -467,6 +535,12 @@ public class GroupCsmLcMeasurementService {
 
         List<IPolicyGroupCalculationInput> policyInputs = new ArrayList<>(contexts);
         GroupAbsorptionResult groupResult = calculateGroupAbsorption(policyInputs, groupStatus, logger, assumptions,year);
+        
+        // [FIX] 将吸收后的真实盈利状态和余额同步回 groupStatus
+        groupStatus.setCohortCsm(groupResult.getCohortCsm());
+        groupStatus.setCohortLc(groupResult.getCohortLc());
+        groupStatus.setProfitable(groupResult.getCohortCsm().compareTo(BigDecimal.ZERO) > 0 || (groupResult.getCohortCsm().compareTo(BigDecimal.ZERO) == 0 && groupResult.getCohortLc().compareTo(BigDecimal.ZERO) == 0));
+
         List<PolicyAllocationResult> allocationResults = allocateAbsorptionToPolicies(policyInputs, groupResult, assumptions);
         writeBackToContexts(contexts, allocationResults, groupStatus);
 

@@ -16,6 +16,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
@@ -510,6 +511,9 @@ public class GroupLifecycleSimulationService {
             GroupAbsorptionResult absorptionResult = groupCsmLcMeasurementService.runGroupAbsorptionAllocation(
                     policyContexts, groupStatus, logger, currentAssumptions,year
             );
+            
+            // [FIX] 更新真实的组级盈利状态，防止后续步骤使用错误的状态
+            groupState.setProfitable(groupStatus.isProfitable());
 
             System.out.println("[DEBUG-BBA] " + year + " 组吸收计算结果: csmAbsorbed=" + absorptionResult.getGroupCsmAbsorbedTotal() + ", lcAbsorbed=" + absorptionResult.getGroupLcAbsorbedTotal());
 
@@ -537,6 +541,40 @@ public class GroupLifecycleSimulationService {
                 // 设置覆盖单元所需的保单列表 - 按照Python逻辑，应仅包含当前保单以计算单单级别比例
                 // ctx.setPolicies(new ArrayList<>(groupState.getGroupPolicies())); // 原组级别逻辑
                 ctx.setPolicies(Collections.singletonList(ps));
+
+                // 计算该保单自己的 CSM 摊销比例（使用覆盖单元动态比例法）
+                BigDecimal policyCsmAmortRatio;
+                if (ctx.getPolicies() != null && !ctx.getPolicies().isEmpty()) {
+                    LocalDate startOfYear = LocalDate.of(year, 1, 1);
+                    boolean initialYear = ctx.isInitialYear();
+                    BigDecimal cuReleased = coverageUnitsService.calculateCoverageUnitsReleased(
+                            ctx.getPolicies(),
+                            ctx.getEopDate(),
+                            startOfYear,
+                            logger,
+                            initialYear
+                    );
+                    BigDecimal cuRemaining = coverageUnitsService.calculateCoverageUnitsRemaining(
+                            ctx.getPolicies(),
+                            ctx.getEopDate(),
+                            logger
+                    );
+
+                    BigDecimal cuTotal = cuReleased.add(cuRemaining);
+                    if (cuTotal.compareTo(BigDecimal.ZERO) > 0) {
+                        policyCsmAmortRatio = cuReleased.divide(cuTotal, 16, RoundingMode.HALF_UP);
+                    } else {
+                        policyCsmAmortRatio = BigDecimal.ZERO;
+                        // [FIX] 针对最后一年（满期），强制设比例为1.0以将摊销前余额全部抹平，确保期末负债归0。
+                        if (cuReleased.compareTo(BigDecimal.ZERO) == 0 && cuRemaining.compareTo(BigDecimal.ZERO) == 0) {
+                             policyCsmAmortRatio = BigDecimal.ONE;
+                        }
+                    }
+                } else {
+                    policyCsmAmortRatio = ctx.getIacfAmortRatio() != null ? ctx.getIacfAmortRatio() : BigDecimal.ZERO;
+                }
+
+                ctx.setCsmAmortRatio(policyCsmAmortRatio);
 
                 // [修复] 计算该保单自己的CSM摊销比例
                 // 这里应该在 calculateCsmMeasurement 内部计算，或者在这里计算并设置

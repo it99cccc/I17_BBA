@@ -42,4 +42,6 @@ public interface IPolicyGroupCalculationInput {
     BigDecimal getAllocatedLcTotal();
     BigDecimal getAllocatedLcCf();
     BigDecimal getAllocatedLcRa();
+    
+    boolean isReversalPolicy();
 }

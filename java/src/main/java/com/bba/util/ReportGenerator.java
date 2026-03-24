@@ -130,8 +130,8 @@ public class ReportGenerator {
             yearRows.add(buildRow(year, "年初的保险合同资产(2)", BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false, 0));
             yearRows.add(buildRow(year, "年初的保险合同净负债(3)=(1)+(2)", openingLrcNonLc, openingLrcLc, openingLic, false, 0));
 
-            BigDecimal revCsm = getBd(data, "保险合同收入_摊销的CSM");
-            BigDecimal revIacf = getBd(data, "保险合同收入_摊销的IACF").negate();
+            BigDecimal revCsm = getBd(data, "保险合同收入_摊销的CSM").negate();
+            BigDecimal revIacf = getBd(data, "保险合同收入_摊销的IACF");
             BigDecimal revExp = getBd(data, "保险合同收入_经验调整");
             BigDecimal revLcReleaseClaims = getBd(data, "保险合同收入_预期赔付与费用_亏损分摊");
             BigDecimal revLcReleaseRa = getBd(data, "保险合同收入_预期释放的非金融风险调整_亏损分摊");
@@ -227,7 +227,7 @@ public class ReportGenerator {
             BigDecimal incurredClaims = BigDecimal.ZERO;
             yearRows.add(buildRow(year, "当期发生赔款及其他相关费用(保险获取现金流量除外)(5)", BigDecimal.ZERO, BigDecimal.ZERO, incurredClaims, false, 1));
 
-            BigDecimal iacfAmortExp = getBd(data, "赔付与费用_摊销的IACF");
+            BigDecimal iacfAmortExp = getBd(data, "赔付与费用_摊销的IACF").negate();
             yearRows.add(buildRow(year, "保险获取现金流量的摊销(6)", iacfAmortExp, BigDecimal.ZERO, BigDecimal.ZERO, false, 1));
 
             Map<String, String> expIacf = new LinkedHashMap<>();
@@ -787,7 +787,7 @@ public class ReportGenerator {
             expOpening.put("content", openingContent.toString());
             yearExps.add(expOpening);
 
-            BigDecimal csmAmort = getBd(data, "保险合同收入_摊销的CSM").negate();
+            BigDecimal csmAmort = getBd(data, "保险合同收入_摊销的CSM");
             yearRows.add(build104Row(year, "合同服务边际的摊销(4)", BigDecimal.ZERO, BigDecimal.ZERO, csmAmort, 1, false));
 
             BigDecimal raReleaseGross = getBd(data, "保险合同收入_预期释放的非金融风险调整_含亏损");
@@ -1207,7 +1207,7 @@ public class ReportGenerator {
             }
 
             BigDecimal revCsm = getBd(data, "保险合同收入_摊销的CSM");
-            BigDecimal revIacf = getBd(data, "保险合同收入_摊销的IACF").negate();
+            BigDecimal revIacf = getBd(data, "保险合同收入_摊销的IACF");
             BigDecimal revExp = getBd(data, "保险合同收入_经验调整");
 
             BigDecimal revLcReleaseClaims = getBd(data, "保险合同收入_预期赔付与费用_亏损分摊");

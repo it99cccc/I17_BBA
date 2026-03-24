@@ -135,7 +135,10 @@ public class RevenueService {
 
         // 7.3 CSM 摊销
         BigDecimal csmAmortRatio;
-        if (context.getPolicies() != null && !context.getPolicies().isEmpty()) {
+        if (context.getCsmAmortRatio() != null) {
+            // 优先使用在 CSM 计量模块中已计算并保存的摊销比例
+            csmAmortRatio = context.getCsmAmortRatio();
+        } else if (context.getPolicies() != null && !context.getPolicies().isEmpty()) {
             LocalDate valuationDate = context.getEopDate() != null ? context.getEopDate() : LocalDate.of(context.getYear(), 12, 31);
             if (valuationDate == null) {
                 valuationDate = LocalDate.of(context.getYear(), 12, 31);
@@ -163,13 +166,12 @@ public class RevenueService {
             }
         }
         
-        BigDecimal endCsmBeforeAmort = context.getEndCsmBeforeAmort() != null ? context.getEndCsmBeforeAmort() : BigDecimal.ZERO;
-        BigDecimal csmAmortAmount = endCsmBeforeAmort.multiply(csmAmortRatio);
-        context.setCsmAmortAmount(csmAmortAmount);
+        // [FIX] CSM 摊销金额应直接使用在 CSM 计量模块中计算的结果
+        // 在组级扭亏为盈时，摊销前 CSM 是由吸收变化动态倒推得出的，直接用已算好的金额最准确
+        BigDecimal csmAmortAmount = context.getCsmAmortAmount() != null ? context.getCsmAmortAmount() : BigDecimal.ZERO;
         context.setRevenueCsmAmort(csmAmortAmount); // Same as amount
 
         Map<String, Object> meta73 = new HashMap<>();
-        meta73.put("CSM Balance (摊销前)", endCsmBeforeAmort);
         meta73.put("摊销比例", csmAmortRatio);
         meta73.put("CSM摊销金额(负)", csmAmortAmount);
         logger.logItem(

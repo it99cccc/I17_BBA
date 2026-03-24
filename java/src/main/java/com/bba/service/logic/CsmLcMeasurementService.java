@@ -868,7 +868,7 @@ public class CsmLcMeasurementService {
              csmAbsorbedCf = context.getCsmAbsorbedCf() != null ? context.getCsmAbsorbedCf() : BigDecimal.ZERO;
              csmAbsorbedRa = context.getCsmAbsorbedRa() != null ? context.getCsmAbsorbedRa() : BigDecimal.ZERO;
         } else {
-             // 单单模式或未预置，进行计算
+             // 单单模式或未预置，进行计算 (Total = CSM_Absorbed + LC_Absorbed => CSM_Absorbed = Total - LC_Absorbed)
              csmAbsorbedTotal = deltaCsmLc.subtract(allocatedLcExpAdjTotal);
              csmAbsorbedCf = deltaCfTotal.subtract(allocatedLcExpAdjCf);
              csmAbsorbedRa = csmAbsorbedTotal.subtract(csmAbsorbedCf);
@@ -889,24 +889,33 @@ public class CsmLcMeasurementService {
         boolean isInitialYear = context.isInitialYear();
 
         BigDecimal csmAmortRatio;
-        if (context.getPolicies() != null && !context.getPolicies().isEmpty()) {
-            csmAmortRatio = coverageUnitsService.calculateCoverageUnitsReleased(
+        if (context.getCsmAmortRatio() != null) {
+            // [FIX] 如果上下文已经由外部（如组级循环）计算好摊销比例，则直接使用，保证两处逻辑一致
+            csmAmortRatio = context.getCsmAmortRatio();
+        } else if (context.getPolicies() != null && !context.getPolicies().isEmpty()) {
+            BigDecimal cuReleased = coverageUnitsService.calculateCoverageUnitsReleased(
                     context.getPolicies(),
                     context.getEopDate(),
                     startOfYear,
                     logger,
                     isInitialYear
-            ).divide(coverageUnitsService.calculateCoverageUnitsRemaining(
+            );
+            BigDecimal cuRemaining = coverageUnitsService.calculateCoverageUnitsRemaining(
                     context.getPolicies(),
                     context.getEopDate(),
                     logger
-            ).add(coverageUnitsService.calculateCoverageUnitsReleased(
-                    context.getPolicies(),
-                    context.getEopDate(),
-                    startOfYear,
-                    logger,
-                    isInitialYear
-            )), 16, RoundingMode.HALF_UP);
+            );
+            
+            BigDecimal cuTotal = cuReleased.add(cuRemaining);
+            if (cuTotal.compareTo(BigDecimal.ZERO) > 0) {
+                csmAmortRatio = cuReleased.divide(cuTotal, 16, RoundingMode.HALF_UP);
+            } else {
+                csmAmortRatio = BigDecimal.ZERO;
+                // 同样进行防呆：如果没有剩余覆盖单元，强平
+                if (cuReleased.compareTo(BigDecimal.ZERO) == 0 && cuRemaining.compareTo(BigDecimal.ZERO) == 0) {
+                     csmAmortRatio = BigDecimal.ONE;
+                }
+            }
         } else {
             csmAmortRatio = BigDecimal.ZERO;
         }
@@ -925,8 +934,14 @@ public class CsmLcMeasurementService {
         BigDecimal csmAmortAmount;
         BigDecimal csmFinal;
         if (csmBeforeAmortAdjusted.compareTo(BigDecimal.ZERO) <= 0) {
-            csmAmortAmount = BigDecimal.ZERO;
-            csmFinal = csmBeforeAmortAdjusted;
+            // [FIX] 即使是负数（亏损合同残留），如果到了最后一年摊销比例为 1.0，也必须强制反向摊销掉！
+            if (csmAmortRatio.compareTo(BigDecimal.ONE) >= 0) {
+                 csmAmortAmount = csmBeforeAmortAdjusted.negate();
+                 csmFinal = BigDecimal.ZERO;
+            } else {
+                 csmAmortAmount = BigDecimal.ZERO;
+                 csmFinal = csmBeforeAmortAdjusted;
+            }
         } else {
             csmAmortAmount = csmBeforeAmortAdjusted.multiply(csmAmortRatio).negate();
             csmFinal = csmBeforeAmortAdjusted.add(csmAmortAmount);
