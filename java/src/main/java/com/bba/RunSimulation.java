@@ -5,6 +5,9 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.ConfigurableApplicationContext;
 
+import java.util.List;
+import java.util.Map;
+
 @SpringBootApplication
 public class RunSimulation {
 
@@ -14,8 +17,8 @@ public class RunSimulation {
         
         try {
             System.out.println("Starting simulation for QHPLIA2023ABBA301...");
-            service.runSimulation("QHPLIA2023ABBA301", "202412", "BBA");
-            System.out.println("Simulation completed.");
+            List<Map<String, Object>> results = service.runSimulation("QHPLIA2023ABBA301", "202412", "BBA");
+            System.out.println("Simulation completed. Result rows: " + (results != null ? results.size() : 0));
         } catch (Exception e) {
             e.printStackTrace();
         } finally {

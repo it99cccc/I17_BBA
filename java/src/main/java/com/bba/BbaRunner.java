@@ -1,10 +1,18 @@
 package com.bba;
 
 import com.bba.service.GroupLifecycleSimulationService;
+import com.bba.service.DataLoaderService;
+import com.bba.util.ReportGenerator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
+
+import java.math.BigDecimal;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.*;
+import java.util.stream.Collectors;
 
 @Component
 @RequiredArgsConstructor
@@ -12,6 +20,7 @@ import org.springframework.stereotype.Component;
 public class BbaRunner implements CommandLineRunner {
 
     private final GroupLifecycleSimulationService groupLifecycleSimulationService;
+    private final DataLoaderService dataLoaderService;
 
     private static String resolveLogsDirPath() {
         java.nio.file.Path cwd = java.nio.file.Paths.get(System.getProperty("user.dir")).toAbsolutePath().normalize();
@@ -49,74 +58,89 @@ public class BbaRunner implements CommandLineRunner {
     public void run(String... args) throws Exception {
         log.info("Starting BBA Lifecycle Simulation...");
 
-        // Handle potential comma-separated arguments from Maven
-        String[] effectiveArgs = args;
-        if (args.length == 1 && args[0].contains(",")) {
-            effectiveArgs = args[0].split(",");
+        String runDateVal = "202412"; // 默认评估日期
+        String valMethod = "7"; // 默认计量方法
+
+        log.info("查询批次 {} 下的所有合同组...", runDateVal);
+        List<String> groupIds = dataLoaderService.getAllGroupIds(runDateVal, valMethod);
+        
+        if (groupIds == null || groupIds.isEmpty()) {
+            log.warn("⚠️ 未找到任何属于批次 {} 且方法为 {} 的合同组。", runDateVal, valMethod);
+            return;
         }
 
-        // Check if group simulation is requested
-        // if (effectiveArgs.length > 0 && effectiveArgs[0].equals("group")) {
-            String groupId = effectiveArgs.length > 1 ? effectiveArgs[1] : "QHPLIA2023ABBA306";
-            String runDateVal = "202412"; // Renamed to avoid conflict with runDate below if needed, though scoping handles it
-            String valMethod = "7"; // Default to BBA or 7 depending on logic, Python uses VAL_METHOD from config which is usually 7 or BBA
-            // Let's use "7" as in the commented out code, or check what Python uses.
-            // Python config usually says VAL_METHOD = 'BBA' or '7'.
-            // The commented code used "7". Let's stick to "7" if that's what the system expects, or "BBA".
-            // Python config: from BBA_group.config import VAL_METHOD
+        log.info("共找到 {} 个合同组，开始批量计量...", groupIds.size());
 
-            log.info("Running Group Simulation for Group ID: {}", groupId);
-            groupLifecycleSimulationService.runSimulation(groupId, runDateVal, valMethod);
-        //     return;
-        // }
+        int successCount = 0;
+        int failCount = 0;
+        List<List<Map<String, Object>>> allResults = new ArrayList<>();
 
-    //    String policyNo = "mock1";
-    //    String certiNo = "";
-    //    String runDate = "202412";
+        for (String groupId : groupIds) {
+            try {
+                log.info(">>> 开始计算合同组: {}", groupId);
+                List<Map<String, Object>> results = groupLifecycleSimulationService.runSimulation(groupId, runDateVal, valMethod);
+                if (results != null && !results.isEmpty()) {
+                    allResults.add(results);
+                }
+                successCount++;
+                log.info("<<< 合同组 {} 计算完成。", groupId);
+            } catch (Exception e) {
+                failCount++;
+                log.error("❌ 合同组 {} 计算失败: {}", groupId, e.getMessage(), e);
+            }
+        }
 
-    //    if (effectiveArgs.length > 0 && !effectiveArgs[0].startsWith("--")) {
-    //        policyNo = effectiveArgs[0];
-    //    }
+        if (!allResults.isEmpty()) {
+            log.info("开始生成批次汇总报表...");
+            List<Map<String, Object>> batchResults = aggregateBatchResults(allResults, runDateVal);
+            generateBatchReports(batchResults, runDateVal);
+            log.info("批次汇总报表生成完成。");
+        }
 
-    //    try {
-    //        java.util.List<java.util.Map<String, Object>> results = lifecycleSimulationService.runSimulation(policyNo, certiNo, runDate);
-    //        writeResultsToCsv(results, policyNo);
-    //        log.info("Simulation completed successfully for policy: {}", policyNo);
-    //    } catch (Exception e) {
-    //        log.error("Simulation failed for policy: {}", policyNo, e);
-    //    }
+        log.info("🎉 批量计量任务结束。总计: {}, 成功: {}, 失败: {}", groupIds.size(), successCount, failCount);
     }
 
-    private void writeResultsToCsv(java.util.List<java.util.Map<String, Object>> results, String policyNo) {
-        if (results == null || results.isEmpty()) return;
+    private List<Map<String, Object>> aggregateBatchResults(List<List<Map<String, Object>>> allResults, String runDateVal) {
+        Map<Integer, Map<String, Object>> aggregatedByYear = new TreeMap<>();
 
-        String logsDirPath = resolveLogsDirPath();
-        java.io.File logsDir = new java.io.File(logsDirPath);
-        if (!logsDir.exists()) {
-            logsDir.mkdirs();
+        for (List<Map<String, Object>> groupResult : allResults) {
+            for (Map<String, Object> yearlyData : groupResult) {
+                Integer year = (Integer) yearlyData.get("year");
+                Map<String, Object> aggregatedYear = aggregatedByYear.computeIfAbsent(year, k -> {
+                    Map<String, Object> newMap = new HashMap<>();
+                    newMap.put("year", k);
+                    newMap.put("policy_no", "BATCH_" + runDateVal);
+                    newMap.put("certi_no", "ALL_GROUPS");
+                    return newMap;
+                });
+
+                for (Map.Entry<String, Object> entry : yearlyData.entrySet()) {
+                    String key = entry.getKey();
+                    Object value = entry.getValue();
+                    if (value instanceof BigDecimal) {
+                        BigDecimal currentSum = (BigDecimal) aggregatedYear.getOrDefault(key, BigDecimal.ZERO);
+                        aggregatedYear.put(key, currentSum.add((BigDecimal) value));
+                    }
+                }
+            }
         }
 
-        String csvFilePath = logsDirPath + "/report_" + policyNo + ".csv";
-        try (java.io.PrintWriter writer = new java.io.PrintWriter(
-                new java.io.OutputStreamWriter(new java.io.FileOutputStream(csvFilePath), java.nio.charset.StandardCharsets.UTF_8)
-        )) {
-            // Write Header
-            java.util.Map<String, Object> firstRow = results.get(0);
-            java.util.List<String> headers = new java.util.ArrayList<>(firstRow.keySet());
-            writer.println(String.join(",", headers));
+        return new ArrayList<>(aggregatedByYear.values());
+    }
 
-            // Write Data
-            for (java.util.Map<String, Object> row : results) {
-                java.util.List<String> values = new java.util.ArrayList<>();
-                for (String header : headers) {
-                    Object val = row.get(header);
-                    values.add(val != null ? val.toString() : "");
-                }
-                writer.println(String.join(",", values));
-            }
-            log.info("Report generated at: {}", new java.io.File(csvFilePath).getAbsolutePath());
-        } catch (java.io.IOException e) {
-            log.error("Failed to write CSV report", e);
+    private void generateBatchReports(List<Map<String, Object>> batchResults, String runDateVal) {
+        try {
+            Files.createDirectories(Paths.get("logs"));
+            String reportPath103 = "logs/report_103_batch_" + runDateVal + ".html";
+            String reportPath104 = "logs/report_104_batch_" + runDateVal + ".html";
+
+            ReportGenerator.generate103Report(batchResults, reportPath103);
+            log.info("已生成批次级别 103 报表: {}", reportPath103);
+
+            ReportGenerator.generate104Report(batchResults, reportPath104);
+            log.info("已生成批次级别 104 报表: {}", reportPath104);
+        } catch (Exception e) {
+            log.error("生成批次级别报表失败", e);
         }
     }
 }

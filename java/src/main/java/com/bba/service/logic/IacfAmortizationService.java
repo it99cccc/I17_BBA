@@ -93,7 +93,16 @@ public class IacfAmortizationService {
             );
             BigDecimal denominatorIacf = cuReleasedIacf.add(cuRemainingIacf);
             //摊销比例
-            iacfAmortRatio = cuReleasedIacf.divide(denominatorIacf, 10, BigDecimal.ROUND_HALF_UP);
+            if (denominatorIacf.compareTo(BigDecimal.ZERO) == 0) {
+                // 如果当期释放和期末剩余都为 0，说明保单已经完全过保或覆盖单元为 0，摊销比例设为 0 或者 1（看具体业务，通常为 0，或者如果还有余额应该一次性摊销）
+                // 稳妥起见，设为 0，避免除零异常
+                iacfAmortRatio = BigDecimal.ZERO;
+                if (logger != null) {
+                    logger.logText("⚠️ 警告: 计算获取费用摊销比例时分母为 0 (cuReleasedIacf=0, cuRemainingIacf=0)，摊销比例默认设置为 0");
+                }
+            } else {
+                iacfAmortRatio = cuReleasedIacf.divide(denominatorIacf, 10, BigDecimal.ROUND_HALF_UP);
+            }
 
             //TODO IACF摊销比例可以复用CSM的
             Map<String, Object> metaRatio = new HashMap<>();

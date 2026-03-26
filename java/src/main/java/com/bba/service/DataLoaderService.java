@@ -44,7 +44,43 @@ public class DataLoaderService {
     // 使用ConcurrentHashMap保证线程安全
     private final Map<String, Assumptions> assumptionsCache = new ConcurrentHashMap<>();
 
+    // 缓存容器：用于缓存获取费用，Key为"保单号_批单号"，Value为费用金额
+    // 使用ConcurrentHashMap保证线程安全
+    private final Map<String, BigDecimal> iacfCache = new ConcurrentHashMap<>();
+    // 标记是否已经加载过获取费用全表数据
+    private volatile boolean isIacfLoaded = false;
+
     private static final DateTimeFormatter YM_FMT = DateTimeFormatter.ofPattern("yyyyMM");
+
+    /**
+     * 加载全部的实际获取费用到缓存中
+     */
+    private void loadAllIacfToCache() {
+        if (!isIacfLoaded) {
+            synchronized (this) {
+                if (!isIacfLoaded) {
+                    List<Map<String, Object>> iacfDataList = policyContractMapper.selectIacfAmountAll();
+                    Map<String, BigDecimal> map = iacfDataList.stream().collect(
+                            java.util.stream.Collectors.toMap(
+                                    data -> {
+                                        String pNo = (String) data.get("policy_no");
+                                        String cNo = (String) data.get("certi_no");
+                                        return pNo + "_" + (cNo == null ? "null" : cNo);
+                                    },
+                                    data -> {
+                                        BigDecimal amount = (BigDecimal) data.get("iacf_amount");
+                                        return amount == null ? BigDecimal.ZERO : amount;
+                                    },
+                                    (v1, v2) -> v1 // 如果有重复key，保留第一个
+                            )
+                    );
+                    iacfCache.putAll(map);
+                    isIacfLoaded = true;
+                    log.info("成功加载全部实际获取费用数据到缓存，共 {} 条记录", map.size());
+                }
+            }
+        }
+    }
 
     /**
      * 根据保单号、凭证号、评估方法和运行日期查询保单详情。
@@ -82,9 +118,11 @@ public class DataLoaderService {
         if (policy == null) {
             return null;
         }
-        //TODO 查询获取费用实际现金流表，测试版本待更换表
-        BigDecimal iacfAmount = policyContractMapper.selectIacfAmount(policy.getPolicyNo(), policy.getCertiNo());
-        policy.setIacfAmount(iacfAmount != null ? iacfAmount : BigDecimal.ZERO);
+        
+        loadAllIacfToCache();
+        String key = policy.getPolicyNo() + "_" + (policy.getCertiNo() == null ? "null" : policy.getCertiNo());
+        BigDecimal iacfAmount = iacfCache.getOrDefault(key, BigDecimal.ZERO);
+        policy.setIacfAmount(iacfAmount);
 
         return policy;
     }
@@ -129,10 +167,7 @@ public class DataLoaderService {
              .orderByAsc(PolicyContract::getPolicyNo);
 
         List<PolicyContract> policies = policyContractMapper.selectList(query);
-        for (PolicyContract policy : policies) {
-            BigDecimal iacfAmount = policyContractMapper.selectIacfAmount(policy.getPolicyNo(), policy.getCertiNo());
-            policy.setIacfAmount(iacfAmount != null ? iacfAmount : BigDecimal.ZERO);
-        }
+        populateIacfAmountBatch(policies);
         return policies;
     }
 
@@ -151,15 +186,28 @@ public class DataLoaderService {
              .orderByAsc(PolicyContract::getPolicyNo);
 
         List<PolicyContract> policies = policyContractMapper.selectList(query);
-
-        // Populate IACF amount for each policy (if needed)
-        // Note: doing this in loop might be slow for large groups, but acceptable for now
-        for (PolicyContract policy : policies) {
-            BigDecimal iacfAmount = policyContractMapper.selectIacfAmount(policy.getPolicyNo(), policy.getCertiNo());
-            policy.setIacfAmount(iacfAmount != null ? iacfAmount : BigDecimal.ZERO);
-        }
+        populateIacfAmountBatch(policies);
 
         return policies;
+    }
+
+    /**
+     * 批量填充保单的实际获取费用
+     * @param policies 保单列表
+     */
+    private void populateIacfAmountBatch(List<PolicyContract> policies) {
+        if (policies == null || policies.isEmpty()) {
+            return;
+        }
+
+        loadAllIacfToCache();
+
+        // 回填到保单列表中
+        for (PolicyContract policy : policies) {
+            String key = policy.getPolicyNo() + "_" + (policy.getCertiNo() == null ? "null" : policy.getCertiNo());
+            BigDecimal iacfAmount = iacfCache.getOrDefault(key, BigDecimal.ZERO);
+            policy.setIacfAmount(iacfAmount);
+        }
     }
 
     /**
@@ -274,5 +322,15 @@ public class DataLoaderService {
         assumptionsCache.put(cacheKey, assumptions);
         // 返回业务对象
         return assumptions;
+    }
+
+    /**
+     * 获取指定批次与计量方法下的唯一 group_id 列表。
+     * @param runDate 运行批次
+     * @param valMethod 计量方法
+     * @return group_id 列表
+     */
+    public List<String> getAllGroupIds(String runDate, String valMethod) {
+        return policyContractMapper.selectDistinctGroupIds(runDate, valMethod);
     }
 }

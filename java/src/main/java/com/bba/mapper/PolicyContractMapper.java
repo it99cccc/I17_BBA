@@ -7,6 +7,7 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Mapper;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 @Mapper
 public interface PolicyContractMapper extends BaseMapper<PolicyContract> {
@@ -22,4 +23,21 @@ public interface PolicyContractMapper extends BaseMapper<PolicyContract> {
             "      )"
     )
     BigDecimal selectIacfAmount(@Param("policyNo") String policyNo, @Param("certiNo") String certiNo);
+
+    @Select(
+            "SELECT \"保单号\" as policy_no, \"批单号\" as certi_no, SUM(COALESCE(\"合计费用\", 0)) AS iacf_amount " +
+            "FROM zh.summary_iacf_cost " +
+            "GROUP BY \"保单号\", \"批单号\""
+    )
+    List<java.util.Map<String, Object>> selectIacfAmountAll();
+
+    @Select(
+            "SELECT DISTINCT group_id " +
+            "FROM zh.t_pp_jl_contract " +
+            "WHERE run_date = #{runDate, jdbcType=VARCHAR} " +
+            "  AND val_method = #{valMethod, jdbcType=VARCHAR} " +
+            "  AND group_id IS NOT NULL " +
+            "  AND TRIM(group_id) <> ''"
+    )
+    List<String> selectDistinctGroupIds(@Param("runDate") String runDate, @Param("valMethod") String valMethod);
 }

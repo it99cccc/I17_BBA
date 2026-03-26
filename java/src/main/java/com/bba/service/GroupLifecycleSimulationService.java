@@ -1,6 +1,8 @@
 package com.bba.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.bba.entity.PolicyContract;
+import com.bba.entity.PvSourceDataEntity;
 import com.bba.entity.RateCurve;
 import com.bba.model.Assumptions;
 import com.bba.model.CalculationContext;
@@ -48,6 +50,8 @@ public class GroupLifecycleSimulationService {
     private final PVSourceLoaderService pvSourceLoaderService;
     private final FulfillmentCashflowChangesService fulfillmentCashflowChangesService;
     private final RevenueService revenueService;
+    private final com.bba.mapper.CalculationResultMapper calculationResultMapper;
+    private final com.bba.mapper.PvSourceDataMapper pvSourceDataMapper;
 
     private static final DateTimeFormatter YYYYMM = DateTimeFormatter.ofPattern("yyyyMM");
     private static final BigDecimal DECIMAL_ZERO = BigDecimal.ZERO;
@@ -59,26 +63,30 @@ public class GroupLifecycleSimulationService {
      * @param runDate   运行日期 (yyyyMM)
      * @param valMethod 评估方法 (例如: BBA)
      */
-    public void runSimulation(String groupId, String runDate, String valMethod) {
+    public List<Map<String, Object>> runSimulation(String groupId, String runDate, String valMethod) {
         String logFilePath = "logs/simulation_group_" + groupId + ".md";
-        try (CalculationLogger logger = new CalculationLogger(logFilePath)) {
+        // 暂时注释掉详细日志输出以提升批量处理性能
+        // try (CalculationLogger logger = new CalculationLogger(logFilePath)) {
+        try (CalculationLogger logger = new CalculationLogger(null)) { // 传入 null 则内部不写文件
             logger.logSection("IFRS 17 BBA 组级别生命周期仿真 - 组ID: " + groupId);
 
             // 1. 初始化组数据
             GroupCohortState groupCohortState = initializeGroup(groupId, runDate, valMethod, logger);
             if (groupCohortState == null) {
-                return;
+                return new ArrayList<>();
             }
 
             // 2. 初始确认（计算PV现值）
             runInitialRecognition(groupCohortState, runDate, valMethod, logger);
 
             // 3. 仿真循环
-            simulateLifecycle(groupCohortState, runDate, valMethod, logger);
+            List<Map<String, Object>> groupYearlyResults = simulateLifecycle(groupCohortState, runDate, valMethod, logger);
 
             logger.logText("\n仿真成功完成。");
+            return groupYearlyResults;
         } catch (Exception e) {
             log.error("仿真失败", e);
+            return new ArrayList<>();
         }
     }
 
@@ -99,6 +107,10 @@ public class GroupLifecycleSimulationService {
             logger.logText("❌ 错误: 未找到组 " + groupId + " 的保单");
             return null;
         }
+
+        //删除PV现值历史数据
+        pvSourceDataMapper.delete(new LambdaQueryWrapper<PvSourceDataEntity>().eq(PvSourceDataEntity::getRunDate,
+                runDate));
 
         logger.logText("- 找到保单数量: " + policies.size());
         for (PolicyContract p : policies) {
@@ -135,6 +147,7 @@ public class GroupLifecycleSimulationService {
             try {
                 PVSourceDataCollection pvData = pvSourceLoaderService.generatePvSourceData(ps.getPolicyNo(), ps.getCertiNo(), runDate);
                 ps.setPvSourceData(pvData);
+                savePvSourceData(pvData,runDate); // 保存 PV 数据到数据库
             } catch (Exception e) {
                 logger.logText("  - ⚠️ 加载 PV 数据失败: " + e.getMessage());
             }
@@ -239,7 +252,7 @@ public class GroupLifecycleSimulationService {
      * @param valMethod  评估方法
      * @param logger     日志记录器
      */
-    private void simulateLifecycle(GroupCohortState groupState, String runDate, String valMethod, CalculationLogger logger) {
+    private List<Map<String, Object>> simulateLifecycle(GroupCohortState groupState, String runDate, String valMethod, CalculationLogger logger) {
         logger.logSection("开始组维度生命周期仿真");
 
         int runYear = Integer.parseInt(runDate.substring(0, 4));
@@ -511,7 +524,7 @@ public class GroupLifecycleSimulationService {
             GroupAbsorptionResult absorptionResult = groupCsmLcMeasurementService.runGroupAbsorptionAllocation(
                     policyContexts, groupStatus, logger, currentAssumptions,year
             );
-            
+
             // [FIX] 更新真实的组级盈利状态，防止后续步骤使用错误的状态
             groupState.setProfitable(groupStatus.isProfitable());
 
@@ -638,10 +651,256 @@ public class GroupLifecycleSimulationService {
 
             // 4. 生成该年度的报告/日志 (可选)，并在MD日志中输出年度组级别汇总结果
             collectGroupYearlyResults(year, groupState.getGroupId(), policyContexts, groupYearlyResults, logger);
+
+            // 5. 将计量结果映射到CalculationResult对象中保存到数据库
+            saveCalculationResults(policyContexts, runDate);
         }
 
         // 生成组级别报表 (103 & 104)
         generateGroupReports(groupState.getGroupId(), groupYearlyResults, logger);
+        return groupYearlyResults;
+    }
+
+    /**
+     * 将计量结果映射到 CalculationResult 对象并保存到数据库
+     *
+     * @param policyContexts 保单计算上下文列表
+     * @param runDateVal     运行日期
+     */
+    private void saveCalculationResults(List<CalculationContext> policyContexts, String runDateVal) {
+        if (policyContexts == null || policyContexts.isEmpty()) {
+            return;
+        }
+
+        List<com.bba.entity.CalculationResult> resultsToSave = new ArrayList<>();
+
+        for (CalculationContext ctx : policyContexts) {
+            com.bba.entity.CalculationResult result = new com.bba.entity.CalculationResult();
+            result.setPolicyNo(ctx.getPolicyNo());
+            result.setCertiNo(ctx.getCertiNo());
+            result.setYear(ctx.getYear());
+            result.setRunDate(runDateVal);
+
+            // --- 新增合同初始确认相关 ---
+            boolean isInitYear = (ctx.getUnderWriteDate().getYear() == ctx.getYear());
+            if (isInitYear || (ctx.getNbInitialCsm() != null && (ctx.getNbInitialCsm().compareTo(BigDecimal.ZERO) != 0 || (ctx.getNbInitialLc() != null && ctx.getNbInitialLc().compareTo(BigDecimal.ZERO) != 0)))) {
+                result.setNbInitialLc(ctx.getNbInitialLc());
+                result.setNbInitPrem(ctx.getActualPremium());
+
+                BigDecimal claims = (ctx.getInitFutClaim() != null ? ctx.getInitFutClaim() : BigDecimal.ZERO)
+                                    .add(ctx.getInitFutMaint() != null ? ctx.getInitFutMaint() : BigDecimal.ZERO);
+                result.setNbInitClaims(claims);
+                result.setNbInitMaint(BigDecimal.ZERO);
+                result.setNbInitIacf(ctx.getActualIacfIncurred());
+                result.setNbInitRa(ctx.getInitRa());
+                result.setNbInitCsm(ctx.getNbInitialCsm());
+
+                BigDecimal nbLc = ctx.getNbInitialLc() != null ? ctx.getNbInitialLc() : BigDecimal.ZERO;
+                boolean isProfitable = nbLc.compareTo(BigDecimal.ZERO) >= 0;
+
+                if (isProfitable) {
+                    result.setNbCfPremProfit(ctx.getActualPremium());
+                    result.setNbCfIacfProfit(ctx.getActualIacfIncurred());
+                    result.setNbCfClaimsProfit(claims);
+                    result.setNbRaProfit(ctx.getInitRa());
+                    result.setNbCsmProfit(ctx.getNbInitialCsm());
+                } else {
+                    result.setNbCfPremLoss(ctx.getActualPremium());
+                    result.setNbCfIacfLoss(ctx.getActualIacfIncurred());
+                    result.setNbCfClaimsLossNonLc(claims);
+                    result.setNbRaLossNonLc(ctx.getInitRa());
+                }
+
+                result.setLcPlNbCfLc(ctx.getNbInitialLcCf());
+                result.setLcPlNbRaLc(ctx.getNbInitialLcRa());
+            }
+
+            // --- 保险合同收入 ---
+            result.setInsuranceRevenueClaimsExpensesGross(ctx.getRevenueClaimsExpensesGross());
+            result.setInsuranceRevenueClaimsExpensesLcAlloc(ctx.getRevenueClaimsExpensesLcAlloc());
+            result.setInsuranceRevenueRaReleaseGross(ctx.getRaReleaseGross());
+            result.setInsuranceRevenueRaReleaseLcAlloc(ctx.getRaReleaseLcAlloc());
+            result.setInsuranceRevenueCsmAmort(ctx.getCsmAmortAmount());
+            result.setInsuranceRevenueIacfAmort(ctx.getIacfAmortAmount());
+
+            BigDecimal expAdj = BigDecimal.ZERO;
+            if (ctx.getExpAdjPrem() != null) expAdj = expAdj.add(ctx.getExpAdjPrem());
+            if (ctx.getExpAdjIacf() != null) expAdj = expAdj.add(ctx.getExpAdjIacf());
+            result.setInsuranceRevenueExpAdj(expAdj);
+
+            // --- 赔付与费用 ---
+            result.setClaimsExpensesLcAllocCf(ctx.getRevenueClaimsExpensesLcAlloc());
+            result.setClaimsExpensesLcAllocRa(ctx.getRaReleaseLcAlloc());
+            result.setClaimsExpensesIacfAmort(ctx.getIacfAmortAmount() != null ? ctx.getIacfAmortAmount().negate() : null);
+
+            // --- 亏损合同损益 ---
+            BigDecimal allocatedLcExpAdjTotal = ctx.getLcAbsorbedTotal() != null ? ctx.getLcAbsorbedTotal() : BigDecimal.ZERO;
+            BigDecimal allocatedLcExpAdjCf = ctx.getLcAbsorbedCf() != null ? ctx.getLcAbsorbedCf() : BigDecimal.ZERO;
+            BigDecimal allocatedLcExpAdjRa = allocatedLcExpAdjTotal.subtract(allocatedLcExpAdjCf);
+            result.setLcPlCfChangeNoCsm(allocatedLcExpAdjCf);
+            result.setLcPlRaChangeNoCsm(allocatedLcExpAdjRa);
+
+            // --- IFIE P&L ---
+            result.setIfiePlCfNonLc(ctx.getIfiePlCfNonLc());
+            result.setIfiePlCfLc(ctx.getIfiePlCfLc());
+            result.setIfiePlRaNonLc(ctx.getIfiePlRaNonLc());
+            result.setIfiePlRaLc(ctx.getIfiePlRaLc());
+            result.setIfiePlCsm(ctx.getIfiePlCsm());
+
+            // --- IFIE OCI ---
+            result.setIfieOciCfNonLc(ctx.getIfieOciCfNonLc());
+            result.setIfieOciCfLc(ctx.getIfieOciCfLc());
+            result.setIfieOciRaNonLc(ctx.getIfieOciRaNonLc());
+            result.setIfieOciRaLc(ctx.getIfieOciRaLc());
+
+            // --- 未到期_调整CSM ---
+            BigDecimal csmAbsorbedTotal = ctx.getCsmAbsorbed() != null ? ctx.getCsmAbsorbed() : BigDecimal.ZERO;
+            BigDecimal csmAbsorbedCf = ctx.getCsmAbsorbedCf() != null ? ctx.getCsmAbsorbedCf() : BigDecimal.ZERO;
+            result.setLrcAdjCsmCfChange(csmAbsorbedCf);
+            result.setLrcAdjCsmRaChange(csmAbsorbedTotal.subtract(csmAbsorbedCf));
+            result.setLrcAdjCsmEstChange(csmAbsorbedTotal);
+
+            // --- 现金流 ---
+            result.setCashflowPremReceived(ctx.getActualPremium());
+            result.setCashflowIacfPaid(ctx.getActualIacfIncurred());
+
+            // --- 期末余额 ---
+            result.setClosingBel(ctx.getEndBel());
+            result.setClosingRa(ctx.getEndRa());
+            result.setClosingCsm(ctx.getEndCsmFinal());
+            result.setClosingLc(ctx.getEndLcFinal());
+            result.setClosingLic(ctx.getEndLic());
+
+            // --- 期初余额 ---
+            result.setOpeningCsm(ctx.getBopCsm());
+            result.setOpeningLc(ctx.getBopLc());
+
+            // 添加到批量保存列表
+            resultsToSave.add(result);
+        }
+
+        // 批量保存到数据库
+        // 注意：mybatis-plus 默认提供 saveBatch，如果没有可以手动实现或分批 insert
+        if (!resultsToSave.isEmpty()) {
+            for (com.bba.entity.CalculationResult r : resultsToSave) {
+                calculationResultMapper.insert(r);
+            }
+        }
+    }
+
+    /**
+     * 将 PV 数据保存到数据库
+     *
+     * @param pvDataCollection PV 数据集合
+     */
+    private void savePvSourceData(PVSourceDataCollection pvDataCollection,String runDate) {
+        if (pvDataCollection == null || pvDataCollection.getDataByMonth() == null || pvDataCollection.getDataByMonth().isEmpty()) {
+            return;
+        }
+
+        List<PvSourceDataEntity> entitiesToSave = new ArrayList<>();
+
+        for (PVSourceData pvData : pvDataCollection.getDataByMonth().values()) {
+            try {
+                com.bba.entity.PvSourceDataEntity entity = new com.bba.entity.PvSourceDataEntity();
+                entity.setUnitId(pvData.getUnitId());
+                entity.setRunDate(runDate);
+                entity.setValuationMonth(pvData.getValuationMonth());
+                entity.setValuationDate(pvData.getValuationDate());
+                entity.setUnderWriteDate(pvData.getUnderWriteDate());
+
+                // Nb Ini
+                entity.setPvflNbIniCfaRecLkdPreAmt(pvData.getPvNbIniCfaRecLkdPreAmt());
+                entity.setPvflNbIniCfaRecLkdAcqAmt(pvData.getPvNbIniCfaRecLkdAcqAmt());
+                entity.setPvflNbIniCfaRecLkdClaAmt(pvData.getPvNbIniCfaRecLkdClaAmt());
+                entity.setPvflNbIniCfaRecLkdMtnAmt(pvData.getPvNbIniCfaRecLkdMtnAmt());
+                entity.setPvflNbIniCfaRecLkdRadAmt(pvData.getPvNbIniCfaRecLkdRadAmt());
+
+                // Nb Eop
+                entity.setPvflNbEopCfaRepWlkPreAmt(pvData.getPvNbEopCfaRepWlkPreAmt());
+                entity.setPvflNbEopCfaRepWlkClaAmt(pvData.getPvNbEopCfaRepWlkClaAmt());
+                entity.setPvflNbEopCfaRepWlkMtnAmt(pvData.getPvNbEopCfaRepWlkMtnAmt());
+                entity.setPvflNbEopCfaRepWlkRadAmt(pvData.getPvNbEopCfaRepWlkRadAmt());
+
+                entity.setPvflNbEopCfaRepCurPreAmt(pvData.getPvNbEopCfaRepCurPreAmt());
+                entity.setPvflNbEopCfaRepCurClaAmt(pvData.getPvNbEopCfaRepCurClaAmt());
+                entity.setPvflNbEopCfaRepCurMtnAmt(pvData.getPvNbEopCfaRepCurMtnAmt());
+                entity.setPvflNbEopCfaRepCurRadAmt(pvData.getPvNbEopCfaRepCurRadAmt());
+                entity.setPvflNbEopCfaRepCurAcqAmt(pvData.getPvNbEopCfaRepCurAcqAmt());
+
+                entity.setPvflNbEopCcaRepWlkClaAmt(pvData.getPvNbEopCcaRepWlkClaAmt());
+                entity.setPvflNbEopCcaRepWlkMtnAmt(pvData.getPvNbEopCcaRepWlkMtnAmt());
+                entity.setPvflNbEopCcaRepWlkRadAmt(pvData.getPvNbEopCcaRepWlkRadAmt());
+                entity.setPvflNbEopCcaRepWlkPreAmt(pvData.getPvNbEopCcaRepWlkPreAmt());
+                entity.setPvflNbEopCcaRepWlkAcqAmt(pvData.getPvNbEopCcaRepWlkAcqAmt());
+
+                // Nb Ini at Eop
+                entity.setPvflNbIniCfaRepWlkPreAmt(pvData.getPvNbIniCfaRepWlkPreAmt());
+                entity.setPvflNbIniCcaRepWlkPreAmt(pvData.getPvNbIniCcaRepWlkPreAmt());
+                entity.setPvflNbIniCfaRepWlkAcqAmt(pvData.getPvNbIniCfaRepWlkAcqAmt());
+                entity.setPvflNbIniCcaRepWlkAcqAmt(pvData.getPvNbIniCcaRepWlkAcqAmt());
+                entity.setPvflNbIniCcaRepWlkClaAmt(pvData.getPvNbIniCcaRepWlkClaAmt());
+                entity.setPvflNbIniCcaRepWlkMtnAmt(pvData.getPvNbIniCcaRepWlkMtnAmt());
+                entity.setPvflNbIniCcaRepWlkRadAmt(pvData.getPvNbIniCcaRepWlkRadAmt());
+                entity.setPvflNbEopCfaRepWlkAcqAmt(pvData.getPvNbEopCfaRepWlkAcqAmt());
+                entity.setPvflNbIniCfaRepWlkClaAmt(pvData.getPvNbIniCfaRepWlkClaAmt());
+                entity.setPvflNbIniCfaRepWlkMtnAmt(pvData.getPvNbIniCfaRepWlkMtnAmt());
+                entity.setPvflNbIniCfaRepWlkRadAmt(pvData.getPvNbIniCfaRepWlkRadAmt());
+
+                // If Bop
+                entity.setPvflIfBopCfaBegLcuClaAmt(pvData.getPvIfBopCfaBegLcuClaAmt());
+                entity.setPvflIfBopCfaBegLcuMtnAmt(pvData.getPvIfBopCfaBegLcuMtnAmt());
+                entity.setPvflIfBopCfaBegLcuRadAmt(pvData.getPvIfBopCfaBegLcuRadAmt());
+
+                entity.setPvflIfBopCfaRepWlkPreAmt(pvData.getPvIfBopCfaRepWlkPreAmt());
+                entity.setPvflIfBopCfaRepWlkAcqAmt(pvData.getPvIfBopCfaRepWlkAcqAmt());
+                entity.setPvflIfBopCfaRepWlkClaAmt(pvData.getPvIfBopCfaRepWlkClaAmt());
+                entity.setPvflIfBopCfaRepWlkMtnAmt(pvData.getPvIfBopCfaRepWlkMtnAmt());
+                entity.setPvflIfBopCfaRepWlkRadAmt(pvData.getPvIfBopCfaRepWlkRadAmt());
+
+                entity.setPvflIfBopCcaRepWlkPreAmt(pvData.getPvIfBopCcaRepWlkPreAmt());
+                entity.setPvflIfBopCcaRepWlkAcqAmt(pvData.getPvIfBopCcaRepWlkAcqAmt());
+                entity.setPvflIfBopCcaRepWlkClaAmt(pvData.getPvIfBopCcaRepWlkClaAmt());
+                entity.setPvflIfBopCcaRepWlkMtnAmt(pvData.getPvIfBopCcaRepWlkMtnAmt());
+                entity.setPvflIfBopCcaRepWlkRadAmt(pvData.getPvIfBopCcaRepWlkRadAmt());
+
+                entity.setPvflIfBopCfaBegWlkClaAmt(pvData.getPvIfBopCfaBegWlkClaAmt());
+                entity.setPvflIfBopCfaBegWlkMtnAmt(pvData.getPvIfBopCfaBegWlkMtnAmt());
+                entity.setPvflIfBopCfaBegWlkRadAmt(pvData.getPvIfBopCfaBegWlkRadAmt());
+
+                // If Eop
+                entity.setPvflIfEopCfaRepWlkPreAmt(pvData.getPvIfEopCfaRepWlkPreAmt());
+                entity.setPvflIfEopCfaRepWlkAcqAmt(pvData.getPvIfEopCfaRepWlkAcqAmt());
+                entity.setPvflIfEopCfaRepWlkClaAmt(pvData.getPvIfEopCfaRepWlkClaAmt());
+                entity.setPvflIfEopCfaRepWlkMtnAmt(pvData.getPvIfEopCfaRepWlkMtnAmt());
+                entity.setPvflIfEopCfaRepWlkRadAmt(pvData.getPvIfEopCfaRepWlkRadAmt());
+
+                entity.setPvflIfEopCfaRepCurClaAmt(pvData.getPvIfEopCfaRepCurClaAmt());
+                entity.setPvflIfEopCfaRepCurMtnAmt(pvData.getPvIfEopCfaRepCurMtnAmt());
+                entity.setPvflIfEopCfaRepCurRadAmt(pvData.getPvIfEopCfaRepCurRadAmt());
+                entity.setPvflIfEopCfaRepCurPreAmt(pvData.getPvIfEopCfaRepCurPreAmt());
+                entity.setPvflIfEopCfaRepCurAcqAmt(pvData.getPvIfEopCfaRepCurAcqAmt());
+
+                entity.setPvflIfEopCcaRepWlkPreAmt(pvData.getPvIfEopCcaRepWlkPreAmt());
+                entity.setPvflIfEopCcaRepWlkAcqAmt(pvData.getPvIfEopCcaRepWlkAcqAmt());
+                entity.setPvflIfEopCcaRepWlkClaAmt(pvData.getPvIfEopCcaRepWlkClaAmt());
+                entity.setPvflIfEopCcaRepWlkMtnAmt(pvData.getPvIfEopCcaRepWlkMtnAmt());
+                entity.setPvflIfEopCcaRepWlkRadAmt(pvData.getPvIfEopCcaRepWlkRadAmt());
+
+                entity.setCreatedAt(java.time.LocalDateTime.now());
+
+                entitiesToSave.add(entity);
+            } catch (Exception e) {
+                log.error("保存 PV 数据失败，unitId: {}, month: {}", pvData.getUnitId(), pvData.getValuationMonth(), e);
+            }
+        }
+
+        // 批量插入
+        if (!entitiesToSave.isEmpty()) {
+            for (PvSourceDataEntity entity : entitiesToSave) {
+                pvSourceDataMapper.insert(entity);
+            }
+        }
     }
 
     private void collectGroupYearlyResults(

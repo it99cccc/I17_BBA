@@ -27,9 +27,9 @@ public class CalculationResult {
 
     @TableField("year")
     private Integer year;
-    
+
     @TableField("run_date")
-    private LocalDateTime runDate;
+    private String runDate;
 
     // --- 新增合同初始确认相关 ---
     @TableField("nb_initial_lc")
